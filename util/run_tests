@@ -24,7 +24,28 @@ __check_platform()
 }
 
 do_help() {
-    echo "$0 --bin-dir . server"
+    cat <<EOF
+Usage $0:  [options] [command] [tester args]
+
+This command runs tester programs for each component
+of Snowcast.
+
+Top-level options:
+ --quiet     Don't print the output of each test
+ --fail-fast Stop after the first test failure
+ --arm       Force using binaries for arm64 platform
+
+Commands:
+ all         Run all tests
+ server      Run tests for snowcast_server
+ control     Run tests for snowcast_control
+ milestone   Run tests for the project milestone
+
+Tester args:
+ -help       Display usage info for tester
+
+If no command is specified, the default is 'all'.
+EOF
 }
 
 check_exists() {
