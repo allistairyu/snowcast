@@ -104,4 +104,4 @@ function get_message_name(message_num)
 end
 
 local tcp_port = DissectorTable.get("tcp.port")
-tcp_port:add(1680, snowcast_protocol)
+tcp_port:add(16800, snowcast_protocol)
