@@ -1,0 +1,9 @@
+*~
+\#*#
+*.o
+
+.DS_Store
+
+# Created by tester
+/stations
+/reference/stations
