@@ -1,0 +1,192 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+TESTER_DIR=${SCRIPT_DIR}/tester
+DATA_DIR=${TESTER_DIR}/data
+MP3_DIR=${SCRIPT_DIR}/../mp3
+
+# Set automatically
+arch="`uname -m`"
+platform=
+
+verbose=true
+fail_fast=false
+bin_dir=$(realpath ${SCRIPT_DIR}/..)
+
+__check_platform()
+{
+    if test -z "$platform" -a \( "$arch" = "arm64" -o "$arch" = "aarch64" \); then
+	platform=linux/arm64
+    elif test -z "$platform"; then
+	platform=linux/amd64
+    fi
+}
+
+do_help() {
+    cat <<EOF
+Usage $0:  [options] [command] [tester args]
+
+This command runs tester programs for each component
+of Snowcast.
+
+Top-level options:
+ --quiet     Don't print the output of each test
+ --fail-fast Stop after the first test failure
+ --arm       Force using binaries for arm64 platform
+
+Commands:
+ all         Run all tests
+ server      Run tests for snowcast_server
+ control     Run tests for snowcast_control
+ milestone   Run tests for the project milestone
+
+Tester args:
+ -help       Display usage info for tester
+
+If no command is specified, the default is 'all'.
+EOF
+}
+
+check_exists() {
+    bin="$1"
+    if [[ ! -e ${bin} ]]; then
+	echo "Binary ${bin} not found!  Exiting"
+	exit 1
+    fi
+}
+
+run_tester() {
+    tester_name=$1
+    shift
+
+    case $platform in
+	linux/amd64)
+	    tester_path=${TESTER_DIR}/
+	;;
+	linux/arm64)
+	    tester_path=${TESTER_DIR}/arm64
+	;;
+	*)
+	    echo "Unsupported platform ${platform}"
+	    exit 1
+    esac
+
+    vflag=""
+    if $verbose; then
+	vflag="-test.v"
+    fi
+
+    failflag=""
+    if $fail_fast; then
+	failflag="-test.failfast"
+    fi
+
+    export BIN_DIR=${bin_dir}
+    export MP3_DIR=$MP3_DIR
+    export DATA_DIR=$DATA_DIR
+    ${tester_path}/${tester_name} $vflag $failflag $@
+}
+
+do_server() {
+    check_exists "${bin_dir}/snowcast_server"
+    run_tester server_tester $@
+}
+
+do_control() {
+    check_exists "${bin_dir}/snowcast_control"
+    run_tester control_tester $@
+}
+
+do_milestone() {
+   do_control -test.v -test.run="Test.+?/Test(ConnectsToServer|AcceptsClientConnection|CompletesHandshake)"
+   do_server -test.v -test.run="Test.+?/Test(ConnectsToServer|AcceptsClientConnection|CompletesHandshake)"
+}
+
+
+do_all() {
+    do_server $@
+    do_control $@
+}
+
+main() {
+    POSITIONAL=()
+    while [[ $# -gt 0 ]]; do
+	key=$1
+	case $key in
+	    --fail-fast|-f)
+		shift
+		fail_fast=true
+		;;
+	    --quiet|-q)
+		shift
+		verbose=false
+		;;
+	    -a|--arm|--arm64|--aarch64)
+		shift
+		if [[ ( "${arch}" == "arm64" ) || ( "${arch}" == "aarch64" ) ]]; then
+		    platform=linux/arm64
+		else
+		    echo "$0 --arm only works on arm64 hosts (platform is ${arch})" 1>&2
+		    exit 1
+		fi
+		;;
+	    -x|--x86-64)
+		shift
+		platform=linux/amd64
+		;;
+	    --bin-dir)
+		bin_dir="$2"
+		shift
+		shift
+		;;
+	    --help)
+		shift
+		do_help
+		exit 0
+		;;
+	    *)
+		POSITIONAL+=("$1")
+		shift
+	esac
+    done
+    set -- "${POSITIONAL[@]}"
+
+    __check_platform
+
+    # Default subcommand
+    if [[ $# == 0 ]]; then
+	do_all
+	exit 0
+    fi
+
+    # Subcommands
+    case $1 in
+	help)
+	    do_help
+	    exit 0
+	    ;;
+	server)
+	    shift
+	    do_server $@
+	    ;;
+	control)
+	    shift
+	    do_control $@
+	    ;;
+	milestone)
+	    shift
+	    do_milestone $@
+	    ;;
+	all)
+	    shift
+	    do_all $@
+	    ;;
+	*)
+	    echo "Unrecognized command $1"
+	    exit 1
+	    ;;
+    esac
+}
+
+main $@
