@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
 	str_to_uint16(argv[3], &udpPort);
 	hello_msg msg = {0, udpPort};
 
-	char bytes[] = {msg.commandType, msg.udpPort & 0xFF, msg.udpPort >> 8};
+	char bytes[] = {msg.commandType, msg.udpPort >> 8, msg.udpPort & 0xFF};
 	int bytes_sent;
 	bytes_sent = send(sock, &bytes, 3, 0);
 	if (!bytes_sent) {
@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
 		// printf("%hu, %hu\n", buf[1], buf[2]);
 
 		uint32_t numStations = 0;
-		numStations = buf[1] + (buf[2] << 8);
+		numStations = (buf[1] << 8) + buf[2];
 		printf("Welcome to Snowcast! The server has %d stations.\n", numStations);
 	}
 
