@@ -1,18 +1,18 @@
 CC = gcc
-CFLAGS = -g -Wall
+CFLAGS = -g -Wall -pthread
 
 .PHONY: all
 
 all: client server
 
 client: client.o
-	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o $@
+	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o snowcast_control
 
 server: server.o
-	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o $@
+	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o snowcast_server
 
 %.o: %.c
 	$(CC) -c $(CFLAGS) $< -o $@
 
 clean:
-	rm -rf client server
+	rm -rf snowcast_control snowcast_server
