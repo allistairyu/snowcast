@@ -22,7 +22,7 @@ struct client_data {
 struct Welcome {
 	uint8_t replyType;
 	uint16_t numStations;
-};
+} __attribute__((packed));
 
 void *client_handler(void *data) {
 	struct client_data *cd = (struct client_data *)data;
@@ -32,21 +32,14 @@ void *client_handler(void *data) {
 	if ((res = recv(cd->sock, buf, 30, 0)) < 0) {
 		perror("recv");
 	} else {
-		// printf("read in %d bytes\n", res);
 		int bytes_sent;
-		struct Welcome msg = {2, numStations};
+		struct Welcome msg = {2, htons(numStations)};
 
-		char bytes[] = {msg.replyType, 
-		msg.numStations >> 8, msg.numStations & 0xFF};
-
-		// char *bytes = serialize_welcome(msg);
-
-		bytes_sent = send(cd->sock, &bytes, 3, 0);
+		bytes_sent = send(cd->sock, &msg, 3, 0);
 		if (!bytes_sent) {
 			perror("send");
 			return 0;
 		}
-		// free(bytes);
 
 	}
 	free(data);

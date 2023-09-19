@@ -10,10 +10,10 @@
 #include <errno.h>
 #include <stdlib.h>
 
-typedef struct Hello {
+struct Hello {
 	uint8_t commandType;
 	uint16_t udpPort;
-} hello_msg;
+} __attribute__((packed));
 
 int str_to_uint16(const char *str, uint16_t *res) {
     char *end;
@@ -65,11 +65,10 @@ int main(int argc, char** argv) {
 
 	uint16_t udpPort;
 	str_to_uint16(argv[3], &udpPort);
-	hello_msg msg = {0, udpPort};
+	struct Hello msg = {0, htons(udpPort)};
 
-	char bytes[] = {msg.commandType, msg.udpPort >> 8, msg.udpPort & 0xFF};
 	int bytes_sent;
-	bytes_sent = send(sock, &bytes, 3, 0);
+	bytes_sent = send(sock, &msg, 3, 0);
 	if (!bytes_sent) {
 		perror("send hello");
 		return 1;
@@ -79,14 +78,6 @@ int main(int argc, char** argv) {
 	if ((res = recv(sock, buf, 3, 0)) < 0) {
 		perror("recv");
 	} else {
-		// printf("read in %d bytes\n", res);
-
-		// for (int i = 0; i < res; i++) {
-		// 	printf("%04x",buf[i]);
-		// }
-		// printf("\n");
-		// printf("%hu, %hu\n", buf[1], buf[2]);
-
 		uint32_t numStations = 0;
 		numStations = (buf[1] << 8) + buf[2];
 		printf("Welcome to Snowcast! The server has %d stations.\n", numStations);
