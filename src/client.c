@@ -82,6 +82,7 @@ int main(int argc, char** argv) {
 		numStations = (buf[1] << 8) + buf[2];
 		printf("Welcome to Snowcast! The server has %d stations.\n", numStations);
 	}
+	close(sock);
 
 	return 0;
 }

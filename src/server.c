@@ -119,6 +119,7 @@ int main(int argc, char **argv) {
 
 		pthread_create(&cd->thread, NULL, client_handler, (void*)cd);
 	}
+	close(lsocket);
 
 	return 0;
 }
