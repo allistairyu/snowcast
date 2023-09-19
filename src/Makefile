@@ -6,9 +6,11 @@ CFLAGS = -g -Wall -pthread
 all: client server
 
 client: client.o
+	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o ../snowcast_control
 	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o snowcast_control
 
 server: server.o
+	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o ../snowcast_server
 	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o snowcast_server
 
 %.o: %.c

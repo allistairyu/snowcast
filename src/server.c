@@ -10,6 +10,8 @@
 #include <stdlib.h>
 #include <pthread.h>
 
+int numStations;
+
 struct client_data {
 	int sock;
 	struct sockaddr addr;
@@ -18,32 +20,33 @@ struct client_data {
 };
 
 struct Welcome {
-	char replyType;
-	unsigned short numStations;
+	uint8_t replyType;
+	uint16_t numStations;
 };
 
 void *client_handler(void *data) {
 	struct client_data *cd = (struct client_data *)data;
-	printf("Client %d connected!\n", cd->sock);
-	char buf[10];	
-
-	if (recv(cd->sock, buf, 3, 0) < 0) {
+	printf("Client connected!\n");
+	char buf[30] = {0};
+	int res;
+	if ((res = recv(cd->sock, buf, 30, 0)) < 0) {
 		perror("recv");
 	} else {
-		printf("hello received\n");
+		// printf("read in %d bytes\n", res);
 		int bytes_sent;
-		char replyType = 2;
-		unsigned short numStations = 2;
-		bytes_sent = send(cd->sock, &replyType, 1, 0);
+		struct Welcome msg = {2, numStations};
+
+		char bytes[] = {msg.replyType, 
+		msg.numStations >> 8, msg.numStations & 0xFF};
+
+		// char *bytes = serialize_welcome(msg);
+
+		bytes_sent = send(cd->sock, &bytes, 3, 0);
 		if (!bytes_sent) {
 			perror("send");
 			return 0;
 		}
-		bytes_sent = send(cd->sock, &numStations, 2, 0);
-		if (!bytes_sent) {
-			perror("send");
-			return 0;
-		}
+		// free(bytes);
 
 	}
 	free(data);
@@ -52,7 +55,18 @@ void *client_handler(void *data) {
 
 int main(int argc, char **argv) {
 
-	const char* port = "16800";
+	if (argc < 3) {
+		fprintf(stderr, "Not enough arguments\n");
+		return 1;
+	}
+
+	const char* port = argv[1];
+	// char *files[argc - 2];
+	// for (int i = 2; i < argc; i++) {
+	// 	files[i] = malloc(sizeof(argv[i]));
+	// 	memcpy(files[i], argv[i], strlen(argv[i]));
+	// }
+	numStations = argc - 2;
 
 	int status;
 	struct addrinfo hints;
