@@ -13,6 +13,9 @@ server: server.o
 	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o ../snowcast_server
 	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o snowcast_server
 
+test: test.o
+	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o test
+
 %.o: %.c
 	$(CC) -c $(CFLAGS) $< -o $@
 

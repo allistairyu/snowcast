@@ -9,12 +9,13 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <ctype.h>
 
-const int BUFLEN = 512;
+const int BUFLEN = 256;
 
-struct Hello {
+struct Message {
 	uint8_t commandType;
-	uint16_t udpPort;
+	uint16_t content;
 } __attribute__((packed));
 
 int str_to_uint16(const char *str, uint16_t *res) {
@@ -28,6 +29,8 @@ int str_to_uint16(const char *str, uint16_t *res) {
     return 1;
 }
 
+// return -1 if no tokens read
+// else return number of tokens
 int parse(char buffer[1024], char *tokens[512]) {
     char delimiters[] = " \t";
     char *next_token = strtok(buffer, delimiters);
@@ -46,9 +49,17 @@ int parse(char buffer[1024], char *tokens[512]) {
     if (!i) {
         return -1;
     }
-    // remove newline character
-    tokens[i - 1][strcspn(tokens[i - 1], "\n")] = 0;
-    return 0;
+    return i;
+}
+
+int isnumber(char *s) {
+	for (int i = 0; i < strlen(s); i++) {
+		if (!isdigit(s[i])) {
+			return 0;
+		}
+		s++;
+	}
+	return 1;
 }
 
 int main(int argc, char** argv) {
@@ -89,7 +100,7 @@ int main(int argc, char** argv) {
 
 	uint16_t udpPort;
 	str_to_uint16(argv[3], &udpPort);
-	struct Hello msg = {0, htons(udpPort)};
+	struct Message msg = {0, htons(udpPort)};
 
 	int bytes_sent;
 	bytes_sent = send(sock, &msg, 3, 0);
@@ -99,10 +110,10 @@ int main(int argc, char** argv) {
 	}
 	char buf[100];
 	int res;
+	uint32_t numStations = 0;
 	if ((res = recv(sock, buf, 3, 0)) < 0) {
 		perror("recv");
 	} else {
-		uint32_t numStations = 0;
 		numStations = (buf[1] << 8) + buf[2];
 		printf("Welcome to Snowcast! The server has %d stations.\n", numStations);
 	}
@@ -113,33 +124,47 @@ int main(int argc, char** argv) {
         char buffer[BUFLEN];
         if (fgets(buffer, BUFLEN, stdin) != NULL) {
             // parse input
-            char delimiters[] = " \t";
-            char *next_token = strtok(buffer, delimiters);
-            next_token[strcspn(next_token, "\n")] = 0;
+            char *tokens[BUFLEN];
+            int num_tokens = parse(buffer, tokens);
 
-            if (!strcmp(next_token, "p")) {
-                // next_token = strtok(NULL, delimiters);
-                // if (!next_token) {
-                // } else {
-                //     next_token[strcspn(next_token, "\n")] = 0;
-                // }
-				
-            } else if (!strcmp(next_token, "s")) {
-                printf("stopping all clients\n");
-                // client_control_stop();
-            } else if (!strcmp(next_token, "g")) {
-                printf("releasing all clients\n");
-                // client_control_release();
-            }
+			// TODO: refactor
+			if (num_tokens == -1) {
+				fprintf(stderr, "eof?\n");
+				return 1;
+			} else if (num_tokens == 0 || num_tokens > 1) {
+				printf("Invalid input: number or 'q' expected\n");
+			} else {
+				if (strcmp(tokens[0], "q\n") == 0) {
+					break;
+				}
+				char *end;
+				tokens[0][strcspn(tokens[0], "\n")] = 0;
+				if (!isnumber(tokens[0])) {
+					printf("Invalid input: number or 'q' expected\n");
+				} else {
+					const long i = strtol(tokens[0], &end, 10);
+					if (i < 0 || i >= numStations) {
+						//TODO: bunch of error stuff
+						break;
+					} else {
+						// switch to station i
+						struct Message stationChange = {1, htons((uint16_t) i)};
+						bytes_sent = send(sock, &stationChange, 3, 0);
+						if (!bytes_sent) {
+							perror("send station change");
+							return 1;
+						}
+					}
+				}
+
+			}
         } else {
             // TODO: exit gracefully...
         }
 
-
-
-
 	}
 	// TODO: figure out how to close socket in case of SIGINT, EOF, etc.
+	// https://stackoverflow.com/questions/449617/how-should-i-close-a-socket-in-a-signal-handler
 	close(sock);
 
 	return 0;

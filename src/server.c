@@ -17,8 +17,9 @@ void *client_handler(void *);
 struct client_data {
 	int sock;
 	struct sockaddr addr;
-	socklen_t addr_size;
+	socklen_t addrSize;
 	pthread_t thread;
+	int curStation;
 };
 
 struct Welcome {
@@ -34,12 +35,16 @@ typedef struct client {
 	struct client *next;
 } client_t;
 
-client_t *thread_list_head;
+// array of client_list heads for each station
+client_t **clientLists;
+// array of mutexes for each client_list head
+// TODO: this seems really stupid is there a better way to do this
+pthread_mutex_t *clientListMutexes;
 
 /*
  * Pulls client from circular doubly-linked thread list
  */
-void pull_client(client_t *c) {
+void pull_client(client_t *c, client_t *thread_list_head) {
     if (c->prev == c) {
         thread_list_head = NULL;
     } else {
@@ -54,7 +59,7 @@ void pull_client(client_t *c) {
 /*
  * Inserts client into circular doubly-linked thread list
  */
-void insert_client(client_t *c) {
+void insert_client(client_t *c, client_t *thread_list_head) {
     if (!thread_list_head) {
         c->next = c;
         c->prev = c;
@@ -69,46 +74,100 @@ void insert_client(client_t *c) {
 }
 
 void client_constructor(struct client_data *cd) {
+	client_t *client = malloc(sizeof(client_t));
+	if (!client) {
+        fprintf(stderr, "malloc\n");
+        exit(1);
+    }
+	client->cd = cd;
+
     int err;
-    if ((err = pthread_create(&cd->thread, 0, client_handler,
-                              cd))) {
+    if ((err = pthread_create(&client->cd->thread, NULL, client_handler, (void*)client))) {
         // handle_error_en(err, "pthread_create");
 		fprintf(stderr, "pthread_create\n");
     }
 
-    if ((err = pthread_detach(cd->thread))) {
+    if ((err = pthread_detach(client->cd->thread))) {
 		fprintf(stderr, "pthread_detach\n");
         // handle_error_en(err, "pthread_detach");
     }
 }
 
-void *client_handler(void *data) {
-	// TODO: 
-	struct client_data *cd = (struct client_data *)data;
-	client_t *client = malloc(sizeof(client_t));
-    if (!client) {
-        fprintf(stderr, "malloc\n");
-        exit(1);
-    }
-	client->cd = cd;
+/*
+ * start_routine for client
+ * input is client_t malloc'ed in client_constructor
+ * created and detached in client_constructor
+ */
+void *client_handler(void *c) {
+	client_t *client = (client_t *)c;
+    
 	printf("Client connected!\n");
 	char buf[30] = {0};
 	int res;
-	if ((res = recv(cd->sock, buf, 30, 0)) < 0) {
+	if ((res = recv(client->cd->sock, buf, 30, 0)) < 0) { //TODO: change from 30
 		perror("recv");
 	} else {
 		int bytes_sent;
 		struct Welcome msg = {2, htons(numStations)};
 
-		bytes_sent = send(cd->sock, &msg, 3, 0);
+		bytes_sent = send(client->cd->sock, &msg, 3, 0);
 		if (!bytes_sent) {
 			perror("send");
 			return 0;
 		}
-
 	}
-	free(data);
+
+	while (1) {
+		if ((res = recv(client->cd->sock, buf, 30, 0)) < 0) { // TODO: change from 30
+			perror("recv");
+		} else if (res == 0) {
+			printf("client closed connection\n");
+			break;
+		} else {
+			int newStation = (buf[1] << 8) + buf[2];
+			printf("new station is %d\n", newStation);
+		}
+	}
+
+
+	free(client);
 	return 0;
+}
+
+void handle_station(void *) {
+	// int udp_socket;
+	// struct addrinfo udp_hints;
+	// struct addrinfo *result;
+
+	// memset(&udp_hints, 0, sizeof(udp_hints));
+	// udp_hints.ai_family = AF_INET;
+	// udp_hints.ai_socktype = SOCK_DGRAM;
+	// udp_hints.ai_flags = AI_PASSIVE;
+
+	// int err;
+	// if ((err = getaddrinfo(NULL, )))
+}
+
+void print_stations() {
+
+}
+
+void change_station(client_t *client, int newStation) {
+	int curStation = client->cd->curStation;
+	// lock mutex for client's cur station
+	client_t *curStationClient = clientLists[curStation];
+	// lock mutex for new station?
+	client_t *newStationClient = clientLists[newStation];
+	pull_client(client, curStationClient);
+	insert_client(client, newStationClient);
+
+	// unlock mutex for new station?
+
+	// unlock mutex for client's 
+}
+
+void create_station() {
+
 }
 
 int main(int argc, char **argv) {
@@ -119,11 +178,6 @@ int main(int argc, char **argv) {
 	}
 
 	const char* port = argv[1];
-	// char *files[argc - 2];
-	// for (int i = 2; i < argc; i++) {
-	// 	files[i] = malloc(sizeof(argv[i]));
-	// 	memcpy(files[i], argv[i], strlen(argv[i]));
-	// }
 	numStations = argc - 2;
 
 	int status;
@@ -140,8 +194,8 @@ int main(int argc, char **argv) {
 		return 2;
 	}
 
-	int lsocket; // TODO: necessary to iterate through linked list?
-    for(r = servinfo; r != NULL; r = r->ai_next) {
+	int lsocket;
+    for (r = servinfo; r != NULL; r = r->ai_next) {
         if ((lsocket = socket(r->ai_family, r->ai_socktype, r->ai_protocol)) < 0) {
 			continue;
 		}
@@ -162,10 +216,24 @@ int main(int argc, char **argv) {
     	perror("setsockopt(SO_REUSEADDR) failed");
 	}
 
+	// allocate memory for client lists and their respective mutexes
+	clientLists = malloc(numStations * sizeof(client_t));
+	if (!clientLists) {
+		perror("malloc");
+		return 1;
+	}
+	for (int i = 0; i < numStations; i++) {
+		
+	}
+
+
 	if (listen(lsocket, 20) < 0) {
 		perror("listen");
 		return 1;
 	}
+
+	// Accept messages from clients and create thread for each client
+	// TODO: does this need to be in new thread to allow for server repl?
 	while (1) {
 		int csock;
 		struct sockaddr client_addr;
@@ -177,14 +245,20 @@ int main(int argc, char **argv) {
 			return 1;
 		}
 		struct client_data *cd = (struct client_data *)malloc(sizeof(struct client_data));
+		if (!cd) {
+			perror("malloc");
+			return 1;
+		}
 		memset(cd, 0, sizeof(struct client_data));
 		cd->sock = csock;
 		memcpy(&cd->addr, &client_addr, client_len);
-		cd->addr_size = client_len;
+		cd->addrSize = client_len;
+		cd->curStation = -1; // no station selected by default
 
-		pthread_create(&cd->thread, NULL, client_handler, (void*)cd);
-		// call client_constructor here instead
+		// create new client and detached thread
+		client_constructor(cd);
 	}
+	// https://stackoverflow.com/questions/449617/how-should-i-close-a-socket-in-a-signal-handler
 	close(lsocket);
 
 	return 0;
