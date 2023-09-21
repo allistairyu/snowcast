@@ -10,6 +10,8 @@
 #include <errno.h>
 #include <stdlib.h>
 
+const int BUFLEN = 512;
+
 struct Hello {
 	uint8_t commandType;
 	uint16_t udpPort;
@@ -26,11 +28,33 @@ int str_to_uint16(const char *str, uint16_t *res) {
     return 1;
 }
 
-int main(int argc, char** argv) {
+int parse(char buffer[1024], char *tokens[512]) {
+    char delimiters[] = " \t";
+    char *next_token = strtok(buffer, delimiters);
 
+    if (*next_token == '\n') {
+        return -1;
+    }
+
+    int i = 0;
+    // iterate through buffer token by token to fill tokens array
+    while (next_token) {
+		tokens[i] = next_token;
+		i++;
+        next_token = strtok(NULL, delimiters);
+    }
+    if (!i) {
+        return -1;
+    }
+    // remove newline character
+    tokens[i - 1][strcspn(tokens[i - 1], "\n")] = 0;
+    return 0;
+}
+
+int main(int argc, char** argv) {
 	if (argc < 4) {
-		fprintf(stderr, "Not enough arguments\n");
-		return 1;
+		printf("usage: snowcast_control <servername> <serverport> <udpport>\n");
+		return 0;
 	}
 
 	int s;
@@ -82,6 +106,40 @@ int main(int argc, char** argv) {
 		numStations = (buf[1] << 8) + buf[2];
 		printf("Welcome to Snowcast! The server has %d stations.\n", numStations);
 	}
+	while (1) {
+		printf("> ");
+
+		// get input
+        char buffer[BUFLEN];
+        if (fgets(buffer, BUFLEN, stdin) != NULL) {
+            // parse input
+            char delimiters[] = " \t";
+            char *next_token = strtok(buffer, delimiters);
+            next_token[strcspn(next_token, "\n")] = 0;
+
+            if (!strcmp(next_token, "p")) {
+                // next_token = strtok(NULL, delimiters);
+                // if (!next_token) {
+                // } else {
+                //     next_token[strcspn(next_token, "\n")] = 0;
+                // }
+				
+            } else if (!strcmp(next_token, "s")) {
+                printf("stopping all clients\n");
+                // client_control_stop();
+            } else if (!strcmp(next_token, "g")) {
+                printf("releasing all clients\n");
+                // client_control_release();
+            }
+        } else {
+            // TODO: exit gracefully...
+        }
+
+
+
+
+	}
+	// TODO: figure out how to close socket in case of SIGINT, EOF, etc.
 	close(sock);
 
 	return 0;

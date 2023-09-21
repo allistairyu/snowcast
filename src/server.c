@@ -11,6 +11,8 @@
 #include <pthread.h>
 
 int numStations;
+void *client_handler(void *);
+
 
 struct client_data {
 	int sock;
@@ -24,8 +26,71 @@ struct Welcome {
 	uint16_t numStations;
 } __attribute__((packed));
 
+typedef struct client {
+	struct client_data *cd;
+	// FILE *file;
+
+	struct client *prev;
+	struct client *next;
+} client_t;
+
+client_t *thread_list_head;
+
+/*
+ * Pulls client from circular doubly-linked thread list
+ */
+void pull_client(client_t *c) {
+    if (c->prev == c) {
+        thread_list_head = NULL;
+    } else {
+        c->prev->next = c->next;
+        c->next->prev = c->prev;
+    }
+    if (c == thread_list_head) {
+        thread_list_head = c->prev;
+    }
+}
+
+/*
+ * Inserts client into circular doubly-linked thread list
+ */
+void insert_client(client_t *c) {
+    if (!thread_list_head) {
+        c->next = c;
+        c->prev = c;
+    } else {
+        client_t *last = thread_list_head->prev;
+        c->next = thread_list_head;
+        c->prev = last;
+        last->next = c;
+        thread_list_head->prev = c;
+    }
+    thread_list_head = c;
+}
+
+void client_constructor(struct client_data *cd) {
+    int err;
+    if ((err = pthread_create(&cd->thread, 0, client_handler,
+                              cd))) {
+        // handle_error_en(err, "pthread_create");
+		fprintf(stderr, "pthread_create\n");
+    }
+
+    if ((err = pthread_detach(cd->thread))) {
+		fprintf(stderr, "pthread_detach\n");
+        // handle_error_en(err, "pthread_detach");
+    }
+}
+
 void *client_handler(void *data) {
+	// TODO: 
 	struct client_data *cd = (struct client_data *)data;
+	client_t *client = malloc(sizeof(client_t));
+    if (!client) {
+        fprintf(stderr, "malloc\n");
+        exit(1);
+    }
+	client->cd = cd;
 	printf("Client connected!\n");
 	char buf[30] = {0};
 	int res;
@@ -49,8 +114,8 @@ void *client_handler(void *data) {
 int main(int argc, char **argv) {
 
 	if (argc < 3) {
-		fprintf(stderr, "Not enough arguments\n");
-		return 1;
+		printf("usage: snowcast_server <tcpport> <file0> [file1] [file2] ...\n");
+		return 0;
 	}
 
 	const char* port = argv[1];
@@ -118,6 +183,7 @@ int main(int argc, char **argv) {
 		cd->addr_size = client_len;
 
 		pthread_create(&cd->thread, NULL, client_handler, (void*)cd);
+		// call client_constructor here instead
 	}
 	close(lsocket);
 
