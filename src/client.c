@@ -114,7 +114,7 @@ int main(int argc, char** argv) {
 	if ((res = recv(sock, buf, 3, 0)) < 0) {
 		perror("recv");
 	} else {
-		numStations = (buf[1] << 8) + buf[2];
+		numStations = (buf[1] << 8) + (buf[2] & 0xFF);
 		printf("Welcome to Snowcast! The server has %d stations.\n", numStations);
 	}
 	while (1) {
