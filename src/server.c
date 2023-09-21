@@ -27,6 +27,12 @@ struct Welcome {
 	uint16_t numStations;
 } __attribute__((packed));
 
+struct GeneralMessage {
+	uint8_t replyType;
+	uint8_t size;
+	char *content;
+} __attribute__((packed));
+
 typedef struct client {
 	struct client_data *cd;
 	// FILE *file;
@@ -43,18 +49,16 @@ void *client_handler(void *);
 void print_stations();
 void change_station(client_t *, int);
 void set_station(client_t *, int);
+void station_handler(void *);
 
 
-// array of client_list heads for each station
+// array of clientList heads for each station
 client_t **clientLists;
-// array of mutexes for each client_list head
-// TODO: this seems really stupid is there a better way to do this
+// array of mutexes for each clientLists head
 pthread_mutex_t *clientListMutexes;
 
-pthread_mutex_t bigMutex = PTHREAD_MUTEX_INITIALIZER;
-
 /*
- * Pulls client from circular doubly-linked thread list
+ * Pulls client from doubly-linked client list
  * thread_list_head must be locked before this function is called
  */
 void pull_client(client_t *c, client_t **head) {
@@ -71,7 +75,7 @@ void pull_client(client_t *c, client_t **head) {
 }
 
 /*
- * Inserts client into doubly-linked thread list
+ * Inserts client into doubly-linked client list
  * head must be locked before this function is called
  */
 void insert_client(client_t *c, client_t **head) {
@@ -141,39 +145,40 @@ void *client_handler(void *c) {
 			perror("recv");
 		} else if (res == 0) {
 			printf("client closed connection\n");
+			// TODO: cleanup resources?
 			break;
 		} else {
 			int newStation = (buf[1] << 8) + (buf[2] & 0xFF);
 
-			printf("new station is %d\n", newStation);
 			if (client->cd->station == -1) {
-				printf("set station\n");
 				set_station(client, newStation);
 			} else {
-				printf("change station\n");
 				change_station(client, newStation);
 			}
-			print_stations();
 		}
 	}
-
 
 	free(client);
 	return 0;
 }
 
-void handle_station(void *) {
-	// int udp_socket;
-	// struct addrinfo udp_hints;
-	// struct addrinfo *result;
+void station_handler(void *) {
+	int udp_socket;
+	struct addrinfo udp_hints;
+	struct addrinfo *result;
 
-	// memset(&udp_hints, 0, sizeof(udp_hints));
-	// udp_hints.ai_family = AF_INET;
-	// udp_hints.ai_socktype = SOCK_DGRAM;
-	// udp_hints.ai_flags = AI_PASSIVE;
+	memset(&udp_hints, 0, sizeof(udp_hints));
+	udp_hints.ai_family = AF_INET;
+	udp_hints.ai_socktype = SOCK_DGRAM;
+	udp_hints.ai_flags = AI_PASSIVE;
 
 	// int err;
 	// if ((err = getaddrinfo(NULL, )))
+
+	// open file
+
+	// read and write from file
+	// loop through client list for this station and write to each udpport
 }
 
 void print_stations() {
@@ -181,7 +186,8 @@ void print_stations() {
 		printf("%d,%s", i, "station name");
 		client_t *c = clientLists[i];
 		while (c) {
-			printf(",client_addr??:%d", c->cd->udpPort);
+			struct sockaddr_in *addr_in = (struct sockaddr_in *)&(c->cd->addr);
+			printf(",%s:%d", inet_ntoa(addr_in->sin_addr), c->cd->udpPort);
 			c = c->next;
 		}
 		printf("\n");
@@ -190,22 +196,17 @@ void print_stations() {
 
 void change_station(client_t *client, int newStation) {
 	int curStation = client->cd->station;
-	// pthread_mutex_lock(&clientListMutexes[curStation]);
-	// pthread_mutex_lock(&clientListMutexes[newStation]);
+	pthread_mutex_lock(&clientListMutexes[curStation]);
+	pthread_mutex_lock(&clientListMutexes[newStation]);
 
-	pthread_mutex_lock(&bigMutex);
 	client_t **curStationClient = &clientLists[curStation];
 	client_t **newStationClient = &clientLists[newStation];
 	pull_client(client, curStationClient);
 	insert_client(client, newStationClient);
 	client->cd->station = newStation;
 
-	// pthread_mutex_unlock(&clientListMutexes[curStation]);
-	// pthread_mutex_unlock(&clientListMutexes[newStation]);
-
-
-	pthread_mutex_unlock(&bigMutex);
-
+	pthread_mutex_unlock(&clientListMutexes[curStation]);
+	pthread_mutex_unlock(&clientListMutexes[newStation]);
 }
 
 void set_station(client_t *client, int station) {
@@ -312,7 +313,6 @@ int main(int argc, char **argv) {
 	for (int i = 0; i < numStations; i++) {
 		pthread_mutex_destroy(&clientListMutexes[i]);
 	}
-	pthread_mutex_destroy(&bigMutex);
 	close(lsocket);
 
 	return 0;
