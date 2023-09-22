@@ -35,13 +35,18 @@ struct GeneralMessage {
 	char *content;
 } __attribute__((packed));
 
-typedef struct client {
+typedef struct Client {
 	struct client_data *cd;
 	// FILE *file;
 
-	struct client *prev;
-	struct client *next;
+	struct Client *prev;
+	struct Client *next;
 } client_t;
+
+typedef struct Station {
+	FILE *file;
+	int id;
+} station_t;
 
 void pull_client(client_t *, client_t **);
 void insert_client(client_t *, client_t **);
@@ -186,17 +191,7 @@ void *client_handler(void *c) {
 }
 
 void *station_handler(void *arg) {
-	// int udp_socket;
-	// struct addrinfo udp_hints;
-	// struct addrinfo *result;
-
-	// memset(&udp_hints, 0, sizeof(udp_hints));
-	// udp_hints.ai_family = AF_INET;
-	// udp_hints.ai_socktype = SOCK_DGRAM;
-	// udp_hints.ai_flags = AI_PASSIVE;
-
-	// int err;
-	// if ((err = getaddrinfo(NULL, )))
+	
 
 	// open file
 
@@ -293,28 +288,22 @@ int parse(char buffer[1024], char *tokens[512]) {
     return i;
 }
 
-int main(int argc, char **argv) {
-
-	if (argc < 3) {
-		printf("usage: snowcast_server <tcpport> <file0> [file1] [file2] ...\n");
-		return 0;
-	}
-
-	const char* port = argv[1];
-	numStations = argc - 2;
+// set up socket
+// type: 1=tcp, 0=udp
+int set_up_socket(int type, const char *port) {
 
 	int status;
 	struct addrinfo hints;
 	struct addrinfo *servinfo, *r;
 
-	memset(&hints, 0, sizeof hints);
+	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_socktype = type ? SOCK_STREAM : SOCK_DGRAM;
 	hints.ai_flags = AI_PASSIVE;
 
 	if ((status = getaddrinfo(NULL, port, &hints, &servinfo)) != 0) {
 		fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
-		return 2;
+		exit(2);
 	}
 
 	int lsocket;
@@ -333,12 +322,30 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "error connecting to the server\n");
 		//TODO: cleanup
 
-		return 1;
+		exit(1);
 	}
 
 	if (setsockopt(lsocket, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0) { // https://stackoverflow.com/questions/24194961/how-do-i-use-setsockoptso-reuseaddr
     	perror("setsockopt(SO_REUSEADDR) failed");
+		exit(1);
 	}
+	return lsocket;
+}
+
+int main(int argc, char **argv) {
+
+	if (argc < 3) {
+		printf("usage: snowcast_server <tcpport> <file0> [file1] [file2] ...\n");
+		return 0;
+	}
+
+	// input: port
+	// return: socket
+	numStations = argc - 2;
+	const char* port = argv[1];
+
+	int tcpSocket = set_up_socket(1, port);
+	int udpSocket = set_up_socket(0, port);
 
 	// allocate memory for client lists and their respective mutexes
 	clientLists = calloc(numStations, sizeof(client_t));
@@ -350,10 +357,8 @@ int main(int argc, char **argv) {
 	for (int i = 0; i < numStations; i++) {
 		pthread_mutex_init(&clientListMutexes[i], NULL);
 	}
-	// memset(clientLists, 0, numStations);
 
-
-	if (listen(lsocket, 20) < 0) {
+	if (listen(tcpSocket, 20) < 0) {
 		perror("listen");
 		return 1;
 	}
@@ -366,12 +371,37 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "pthread_create\n");
 		return 1;
     }
-
 	if ((err = pthread_detach(repl_thread))) {
 		fprintf(stderr, "pthread_detach\n");
 		return 1;
         // handle_error_en(err, "pthread_detach");
     }
+
+	pthread_t *station_threads = malloc(numStations * sizeof(pthread_t));
+	if (!station_threads) {
+		perror("malloc");
+		return 1;
+	}
+
+	// Create threads for each station
+	station_t *stations = malloc(numStations * sizeof(station_t));
+
+	for (int i = 0; i < numStations; i++) {
+		int err;
+		FILE *song = fopen(argv[i + 2], "r"); // may be NULL
+		stations[i].file = song;
+		stations[i].id = i;
+		if ((err = pthread_create(&station_threads[i], NULL, station_handler, (void *) &stations[i]))) {
+			// handle_error_en(err, "pthread_create");
+			fprintf(stderr, "pthread_create\n");
+		}
+
+		if ((err = pthread_detach(station_threads[i]))) {
+			fprintf(stderr, "pthread_detach\n");
+			// handle_error_en(err, "pthread_detach");
+		}
+	}
+
 	// Accept connections from clients and create thread for each client
 	// TODO: does this need to be in new thread to allow for server repl?
 	while (1) {
@@ -379,7 +409,7 @@ int main(int argc, char **argv) {
 		struct sockaddr client_addr;
 		socklen_t client_len = sizeof(client_addr);
 
-		csock = accept(lsocket, &client_addr, &client_len);
+		csock = accept(tcpSocket, &client_addr, &client_len);
 		if (csock == -1) {
 			perror("accept");
 			return 1;
@@ -404,7 +434,8 @@ int main(int argc, char **argv) {
 	for (int i = 0; i < numStations; i++) {
 		pthread_mutex_destroy(&clientListMutexes[i]);
 	}
-	close(lsocket);
+	free(station_threads);
+	close(tcpSocket);
 
 	return 0;
 }
