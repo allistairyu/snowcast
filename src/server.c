@@ -13,6 +13,7 @@
 #include <signal.h>
 
 int numStations;
+const int BUFLEN = 256;
 
 struct client_data {
 	int sock;
@@ -42,7 +43,6 @@ typedef struct client {
 	struct client *next;
 } client_t;
 
-void *client_handler(void *);
 void pull_client(client_t *, client_t **);
 void insert_client(client_t *, client_t **);
 void client_constructor(struct client_data *);
@@ -50,7 +50,8 @@ void *client_handler(void *);
 void print_stations();
 void change_station(client_t *, int);
 void set_station(client_t *, int);
-void station_handler(void *);
+void *station_handler(void *);
+int parse(char[1024], char *[512]);
 
 
 // array of clientList heads for each station
@@ -184,7 +185,7 @@ void *client_handler(void *c) {
 	return 0;
 }
 
-void station_handler(void *) {
+void *station_handler(void *arg) {
 	// int udp_socket;
 	// struct addrinfo udp_hints;
 	// struct addrinfo *result;
@@ -201,18 +202,48 @@ void station_handler(void *) {
 
 	// read and write from file
 	// loop through client list for this station and write to each udpport
+	return 0;
 }
 
-void print_stations() {
+void print_stations(FILE *f) {
 	for (int i = 0; i < numStations; i++) {
-		printf("%d,%s", i, "station name");
+		fprintf(f, "%d,%s", i, "station name");
 		client_t *c = clientLists[i];
 		while (c) {
 			struct sockaddr_in *addr_in = (struct sockaddr_in *)&(c->cd->addr);
-			printf(",%s:%d", inet_ntoa(addr_in->sin_addr), c->cd->udpPort);
+			fprintf(f, ",%s:%d", inet_ntoa(addr_in->sin_addr), c->cd->udpPort);
 			c = c->next;
 		}
-		printf("\n");
+		fprintf(f, "\n");
+	}
+}
+
+void *repl_handler(void *arg) {
+	while (1) {
+		char buffer[BUFLEN];
+		if (fgets(buffer, BUFLEN, stdin) != NULL) {
+			char *tokens[BUFLEN];
+            int num_tokens = parse(buffer, tokens);
+
+			if (num_tokens == -1) {
+				//idk
+			} else if (num_tokens == 0) {
+				//idk
+			} else {
+				if (strcmp(tokens[0], "p\n") == 0) {
+					printf("here\n");
+					print_stations(stdout);
+				} else if (strcmp(tokens[0], "p") == 0 && num_tokens == 2) {
+					tokens[1][strcspn(tokens[1], "\n")] = 0;
+					FILE *f = fopen(tokens[1], "w");// TODO: 
+					print_stations(f);
+					fclose(f);
+				} else if (strcmp(tokens[0], "q\n") == 0) {
+					// TODO: more clean up
+					pthread_exit(0);
+				}
+			}
+		}
 	}
 }
 
@@ -237,6 +268,29 @@ void set_station(client_t *client, int station) {
 	insert_client(client, stationClient);
 	client->cd->station = station;
 	pthread_mutex_unlock(&clientListMutexes[station]);
+}
+
+// return -1 if no tokens read
+// else return number of tokens
+int parse(char buffer[1024], char *tokens[512]) {
+    char delimiters[] = " \t";
+    char *next_token = strtok(buffer, delimiters);
+
+    if (*next_token == '\n') {
+        return -1;
+    }
+
+    int i = 0;
+    // iterate through buffer token by token to fill tokens array
+    while (next_token) {
+		tokens[i] = next_token;
+		i++;
+        next_token = strtok(NULL, delimiters);
+    }
+    if (!i) {
+        return -1;
+    }
+    return i;
 }
 
 int main(int argc, char **argv) {
@@ -273,13 +327,14 @@ int main(int argc, char **argv) {
 		}
 		close(lsocket);
     }
+	freeaddrinfo(servinfo);
 
 	if (r == NULL) {
-		fprintf(stderr, "Could not find local interface\n");
+		fprintf(stderr, "error connecting to the server\n");
+		//TODO: cleanup
+
 		return 1;
 	}
-
-	freeaddrinfo(servinfo);
 
 	if (setsockopt(lsocket, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0) { // https://stackoverflow.com/questions/24194961/how-do-i-use-setsockoptso-reuseaddr
     	perror("setsockopt(SO_REUSEADDR) failed");
@@ -303,6 +358,20 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
+	int err;
+	pthread_t repl_thread;
+    if ((err = pthread_create(&repl_thread, NULL, repl_handler, 0))) {
+        // handle_error_en(err, "pthread_create");
+		//TODO: cleanup
+		fprintf(stderr, "pthread_create\n");
+		return 1;
+    }
+
+	if ((err = pthread_detach(repl_thread))) {
+		fprintf(stderr, "pthread_detach\n");
+		return 1;
+        // handle_error_en(err, "pthread_detach");
+    }
 	// Accept connections from clients and create thread for each client
 	// TODO: does this need to be in new thread to allow for server repl?
 	while (1) {
