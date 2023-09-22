@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <assert.h>
+#include <signal.h>
 
 int numStations;
 
@@ -63,7 +64,7 @@ pthread_mutex_t *clientListMutexes;
  */
 void pull_client(client_t *c, client_t **head) {
     if (*head == c) {
-		*head = c->next;
+		*head = (*head)->next;
 		if (*head) {
 			(*head)->prev = NULL;
 		}
@@ -99,6 +100,8 @@ void client_constructor(struct client_data *cd) {
         exit(1);
     }
 	client->cd = cd;
+	client->next = NULL;
+	client->prev = NULL;
 
     int err;
     if ((err = pthread_create(&client->cd->thread, NULL, client_handler, (void*)client))) {
@@ -112,6 +115,25 @@ void client_constructor(struct client_data *cd) {
 		fprintf(stderr, "pthread_detach\n");
         // handle_error_en(err, "pthread_detach");
     }
+}
+
+void *monitor_signal(void *arg) {
+    // TODO: Wait for a SIGINT to be sent to the server process and cancel
+    // all client threads when one arrives.
+
+    sigset_t *s = arg;
+    int sig;
+    while (1) {
+        // wait for SIGINT
+        sigwait(s, &sig);
+
+        printf("SIGINT received, cancelling all clients\n");
+        // pthread_mutex_lock(&sc.server_mutex);
+        // delete_all();
+        // pthread_mutex_unlock(&sc.server_mutex);
+    }
+
+    return NULL;
 }
 
 /*
@@ -163,14 +185,14 @@ void *client_handler(void *c) {
 }
 
 void station_handler(void *) {
-	int udp_socket;
-	struct addrinfo udp_hints;
-	struct addrinfo *result;
+	// int udp_socket;
+	// struct addrinfo udp_hints;
+	// struct addrinfo *result;
 
-	memset(&udp_hints, 0, sizeof(udp_hints));
-	udp_hints.ai_family = AF_INET;
-	udp_hints.ai_socktype = SOCK_DGRAM;
-	udp_hints.ai_flags = AI_PASSIVE;
+	// memset(&udp_hints, 0, sizeof(udp_hints));
+	// udp_hints.ai_family = AF_INET;
+	// udp_hints.ai_socktype = SOCK_DGRAM;
+	// udp_hints.ai_flags = AI_PASSIVE;
 
 	// int err;
 	// if ((err = getaddrinfo(NULL, )))

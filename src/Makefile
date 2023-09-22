@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -g -Wall -pthread
+CFLAGS = -g -Wall -pthread -fsanitize=address -static-libasan -g
 
 .PHONY: all
 
