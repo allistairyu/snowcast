@@ -51,12 +51,8 @@ typedef struct Station {
 	int id;
 	char* name;
 	int udpSocket;
+	pthread_t *thread;
 } station_t;
-
-typedef struct sig_handler {
-    sigset_t set;
-    pthread_t thread;
-} sig_handler_t;
 
 void pull_client(client_t *, client_t **);
 void insert_client(client_t *, client_t **);
@@ -155,15 +151,20 @@ void delete_all() {
 			}
 			c = c->next;
 		}
+		if (pthread_cancel(*stations[i].thread)) {
+			fprintf(stderr, "pthread_cancel");
+		}
 	}
 }
 
 void thread_cleanup(void *arg) {
     client_t *c = arg;
-
-    pthread_mutex_lock(&clientListMutexes[c->cd->station]);
-    pull_client(c, &clientLists[c->cd->station]);
-    pthread_mutex_unlock(&clientListMutexes[c->cd->station]);
+	int station = c->cd->station;
+	if (station != -1) {
+		pthread_mutex_lock(&clientListMutexes[station]);
+		pull_client(c, &clientLists[station]);
+		pthread_mutex_unlock(&clientListMutexes[station]);
+	}
 
     client_destructor(c);
 }
@@ -214,7 +215,8 @@ void *client_handler(void *c) {
 	if ((res = recv(client->cd->sock, buf, 3, 0)) < 0) { //TODO: buf size 3?
 		perror("recv");
 	} else {
-		if (res == 3) {
+		if (res == 3 && buf[0] == 0) {
+
 			uint16_t firstByte = buf[1] << 8;
 			uint8_t secByte = buf[2] & 0xFF;
 			uint16_t udpPort = firstByte + secByte;
@@ -238,11 +240,6 @@ void *client_handler(void *c) {
 				fprintf(stderr, "setsockopt 1\n");
 				pthread_exit((void *) 1);
 			}
-			if (setsockopt(client->cd->sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-				fprintf(stderr, "setsockopt 1\n");
-				pthread_exit((void *) 1);
-			}
-
 
 			while (1) {
 				int count = 0;
@@ -260,7 +257,7 @@ void *client_handler(void *c) {
 					// TODO: refactor
 					// check if additional Hello message
 					if (buf[0] == 0) {
-						char invalid_msg[] = "Only one Hello message must be sent.";
+						char invalid_msg[] = "Only one Hello message can be sent from a client.";
 						send_general_message(client->cd->sock, invalid_msg, 4);
 						break;
 					} else if (buf[0] != 1) {
@@ -276,12 +273,10 @@ void *client_handler(void *c) {
 						char invalid_msg[40];
 						sprintf(invalid_msg, "Station %d does not exist.", newStation);
 						send_general_message(client->cd->sock, invalid_msg, 4);
-						break; // kill this thread?
+						break;
 					} else {
 						printf("session id %s:%d: received SET_STATION to station %d\n", inet_ntoa(addr_in->sin_addr), client->cd->udpPort, newStation);
-
 						send_general_message(client->cd->sock, stations[newStation].name, 3);
-
 						if (client->cd->station == -1) {
 							set_station(client, newStation);
 						} else {
@@ -294,7 +289,6 @@ void *client_handler(void *c) {
 			}
 		}
 	}
-
 	
 	pthread_cleanup_pop(1);
 	return 0;
@@ -349,56 +343,7 @@ void *station_handler(void *arg) {
 }
 
 void sigint_handler(int n) {
-	pthread_mutex_lock(&serverMutex);
-	delete_all(); // TODO: anything else for SIGINT?
-	pthread_mutex_unlock(&serverMutex);
 	sigint_received = 1;
-}
-
-
-
-void *monitor_signal(void *arg) {
-    // TODO: Wait for a SIGINT to be sent to the server process and cancel
-    // all client threads when one arrives.
-
-    sigset_t *s = arg;
-    int sig;
-    while (1) {
-        // wait for SIGINT
-        sigwait(s, &sig);
-
-        printf("SIGINT received, cancelling all clients\n");
-        pthread_mutex_lock(&serverMutex);
-        delete_all(); // TODO: anything else for SIGINT?
-        pthread_mutex_unlock(&serverMutex);
-		pthread_exit((void *) 1);
-    }
-
-    return NULL;
-}
-
-sig_handler_t *sig_handler_constructor() {
-    sig_handler_t *s = malloc(sizeof(sig_handler_t)); // TODO: free this at some point
-    if (!s) {
-        fprintf(stderr, "malloc\n");
-        exit(1);
-    }
-    sigemptyset(&s->set);
-    sigaddset(&s->set, SIGINT);
-    int err;
-    // create thread for sole purpose of waiting for and handling SIGINT
-    if ((err = pthread_create(&s->thread, 0, monitor_signal, &s->set))) {
-        // handle_error_en(err, "pthread_create");
-		fprintf(stderr, "pthread_create");
-    }
-
-    return s;
-}
-
-void sig_handler_destructor(sig_handler_t *sighandler) {
-    pthread_cancel(sighandler->thread);
-    pthread_join(sighandler->thread, 0);
-    free(sighandler);
 }
 
 void print_stations(FILE *f) {
@@ -415,6 +360,7 @@ void print_stations(FILE *f) {
 }
 
 void *repl_handler(void *arg) {
+	printf("here\n");
 	while (1) {
 		char buffer[BUFLEN];
 		if (fgets(buffer, BUFLEN, stdin) != NULL) {
@@ -435,11 +381,13 @@ void *repl_handler(void *arg) {
 					fclose(f);
 				} else if (strcmp(tokens[0], "q\n") == 0) {
 					// TODO: more clean up
-					pthread_exit(0);
+					sigint_received = 1;
+					break;
 				}
 			}
 		}
 	}
+	return 0;
 }
 
 void change_station(client_t *client, int newStation) {
@@ -541,134 +489,126 @@ int main(int argc, char **argv) {
 		printf("usage: snowcast_server <tcpport> <file0> [file1] [file2] ...\n");
 		return 0;
 	}
-	// sigset_t mask;
-    // sigemptyset(&mask);
-    // sigaddset(&mask, SIGINT);
-    // pthread_sigmask(SIG_BLOCK, &mask, 0);
-	// sig_handler_t *sighandler = sig_handler_constructor();
-	struct sigaction sa = {sigint_handler, SA_RESTART};
+
+	struct sigaction sa;
+	sa.sa_handler = sigint_handler;
+	sa.sa_flags = 0;
+	sigemptyset( &sa.sa_mask );
 
 	if (-1 == sigaction(SIGINT, &sa, NULL)) {
 		perror("sigaction() failed");
 		exit(EXIT_FAILURE);
 	}
-	while (!sigint_received) {
 
-		numStations = argc - 2;
-		const char* port = argv[1];
+	numStations = argc - 2;
+	const char* port = argv[1];
 
-		int tcpSocket = set_up_socket(1, port);
-		int udpSocket = set_up_socket(0, port);
+	int tcpSocket = set_up_socket(1, port);
+	int udpSocket = set_up_socket(0, port);
 
-		// allocate memory for client lists and their respective mutexes
-		clientLists = calloc(numStations, sizeof(client_t));
-		clientListMutexes = malloc(numStations * sizeof(pthread_mutex_t));
-		if (!clientLists || !clientListMutexes) {
-			perror("malloc");
-			return 1;
-		}
-		for (int i = 0; i < numStations; i++) {
-			pthread_mutex_init(&clientListMutexes[i], NULL);
-		}
-
-		if (listen(tcpSocket, 20) < 0) {
-			perror("listen");
-			return 1;
-		}
-
-		int err;
-		pthread_t repl_thread;
-		// join thread at end of main
-		if ((err = pthread_create(&repl_thread, NULL, repl_handler, 0))) {
-			// handle_error_en(err, "pthread_create");
-			//TODO: cleanup
-			fprintf(stderr, "pthread_create\n");
-			return 1;
-		}
-
-		// Create threads for each station
-		pthread_t *station_threads = malloc(numStations * sizeof(pthread_t *));
-		if (!station_threads) {
-			perror("malloc");
-			return 1;
-		}
-
-		stations = malloc(numStations * sizeof(station_t));
-		if (!stations) {
-			perror("malloc");
-			return 1;
-		}
-		
-		for (int i = 0; i < numStations; i++) {
-			int err;
-			FILE *song = fopen(argv[i + 2], "r"); // may be NULL
-			stations[i].file = song;
-			stations[i].id = i;
-			stations[i].name = argv[i + 2];
-			stations[i].udpSocket = udpSocket;
-			if ((err = pthread_create(&station_threads[i], NULL, station_handler, (void *) &stations[i]))) {
-				// handle_error_en(err, "pthread_create");
-				fprintf(stderr, "pthread_create\n");
-			}
-
-			if ((err = pthread_detach(station_threads[i]))) {
-				fprintf(stderr, "pthread_detach\n");
-				// handle_error_en(err, "pthread_detach");
-			}
-		}
-
-		// Accept connections from clients and create thread for each client
-		while (1) {
-			int csock;
-			struct sockaddr client_addr;
-			socklen_t client_len = sizeof(client_addr);
-
-			// set timeout sockopt TODO: before or after accept? also, does not
-			// account for receiving 1 byte of Hello message resetting the timer i think
-			
-
-			csock = accept(tcpSocket, &client_addr, &client_len);
-			if (csock == -1) {
-				perror("accept");
-				return 1;
-			}
-			struct timeval tv = {
-				.tv_usec = 100000
-			};
-			if (setsockopt(csock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-				fprintf(stderr, "setsockopt 2\n");
-				return 1;
-			}
-			struct client_data *cd = malloc(sizeof(struct client_data));
-			if (!cd) {
-				perror("malloc");
-				return 1;
-			}
-			memset(cd, 0, sizeof(struct client_data));
-			cd->sock = csock;
-			memcpy(&cd->addr, &client_addr, client_len);
-			cd->addrSize = client_len;
-			cd->station = -1; // no station selected by default
-
-			// create new client and detached thread
-			client_constructor(cd);
-		}
-		// https://stackoverflow.com/questions/449617/how-should-i-close-a-socket-in-a-signal-handler
-
-
-
-		for (int i = 0; i < numStations; i++) {
-			pthread_mutex_destroy(&clientListMutexes[i]);
-			// free(station_threads[i]);
-
-		}
-		// sig_handler_destructor(sighandler);
-		free(station_threads);
-		free(stations);
-		pthread_cancel(repl_thread);
-		pthread_join(repl_thread, 0);
-		pthread_mutex_destroy(&serverMutex);
-		close(tcpSocket);
+	// allocate memory for client lists and their respective mutexes
+	clientLists = calloc(numStations, sizeof(client_t));
+	clientListMutexes = malloc(numStations * sizeof(pthread_mutex_t));
+	if (!clientLists || !clientListMutexes) {
+		perror("malloc");
+		return 1;
 	}
+	for (int i = 0; i < numStations; i++) {
+		pthread_mutex_init(&clientListMutexes[i], NULL);
+	}
+
+	if (listen(tcpSocket, 20) < 0) {
+		perror("listen");
+		return 1;
+	}
+
+	int err;
+	pthread_t repl_thread;
+	// join thread at end of main
+    if ((err = pthread_create(&repl_thread, NULL, repl_handler, 0))) {
+        // handle_error_en(err, "pthread_create");
+		//TODO: cleanup
+		fprintf(stderr, "pthread_create\n");
+		return 1;
+    }
+
+
+	stations = malloc(numStations * sizeof(station_t));
+	if (!stations) {
+		perror("malloc");
+		return 1;
+	}
+	
+	for (int i = 0; i < numStations; i++) {
+		int err;
+		FILE *song = fopen(argv[i + 2], "r"); // may be NULL
+		stations[i].file = song;
+		stations[i].id = i;
+		stations[i].name = argv[i + 2];
+		stations[i].udpSocket = udpSocket;
+		pthread_t *thread = malloc(sizeof(pthread_t));
+		stations[i].thread = thread;
+		if ((err = pthread_create(stations[i].thread, NULL, station_handler, (void *) &stations[i]))) {
+			// handle_error_en(err, "pthread_create");
+			fprintf(stderr, "pthread_create\n");
+		}
+
+		if ((err = pthread_detach(*stations[i].thread))) {
+			fprintf(stderr, "pthread_detach\n");
+			// handle_error_en(err, "pthread_detach");
+		}
+	}
+
+	// Accept connections from clients and create thread for each client
+	while (!sigint_received) {
+		int csock;
+		struct sockaddr client_addr;
+		socklen_t client_len = sizeof(client_addr);
+
+		csock = accept(tcpSocket, &client_addr, &client_len);
+		if (csock == -1) {
+			if (sigint_received) {
+				break;
+			}
+			perror("accept");
+			return 1;
+		}
+		struct timeval tv = {
+			.tv_usec = 100000
+		};
+		if (setsockopt(csock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+			fprintf(stderr, "setsockopt 2\n");
+			return 1;
+		}
+		struct client_data *cd = malloc(sizeof(struct client_data));
+		if (!cd) {
+			perror("malloc");
+			return 1;
+		}
+		memset(cd, 0, sizeof(struct client_data));
+		cd->sock = csock;
+		memcpy(&cd->addr, &client_addr, client_len);
+		cd->addrSize = client_len;
+		cd->station = -1; // no station selected by default
+
+		// create new client and detached thread
+		client_constructor(cd);
+	}
+	// https://stackoverflow.com/questions/449617/how-should-i-close-a-socket-in-a-signal-handler
+
+	for (int i = 0; i < numStations; i++) {
+		pthread_mutex_destroy(&clientListMutexes[i]);
+	}
+	pthread_mutex_lock(&serverMutex);
+	delete_all(); // TODO: anything else for SIGINT?
+	pthread_mutex_unlock(&serverMutex);
+	// free(stations);
+	pthread_cancel(repl_thread);
+
+	pthread_join(repl_thread, 0);
+
+	pthread_mutex_destroy(&serverMutex);
+	close(tcpSocket);
+
 	return 0;
 }
