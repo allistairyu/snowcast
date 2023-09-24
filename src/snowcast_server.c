@@ -46,6 +46,8 @@ typedef struct Client {
 typedef struct Station {
 	FILE *file;
 	int id;
+	const char* name;
+	int udpSocket;
 } station_t;
 
 void pull_client(client_t *, client_t **);
@@ -57,12 +59,15 @@ void change_station(client_t *, int);
 void set_station(client_t *, int);
 void *station_handler(void *);
 int parse(char[1024], char *[512]);
+int set_up_socket(int, const char*);
 
 
 // array of clientList heads for each station
 client_t **clientLists;
 // array of mutexes for each clientLists head
 pthread_mutex_t *clientListMutexes;
+// array of stations
+station_t *stations;
 
 /*
  * Pulls client from doubly-linked client list
@@ -157,7 +162,9 @@ void *client_handler(void *c) {
 		perror("recv");
 	} else {
 		int udpPort = (buf[1] << 8) + (buf[2] & 0xFF);
+		printf("udpPort is %d\n", udpPort);
 		client->cd->udpPort = udpPort;
+
 		int bytes_sent;
 		struct Welcome msg = {2, htons(numStations)};
 
@@ -191,18 +198,39 @@ void *client_handler(void *c) {
 }
 
 void *station_handler(void *arg) {
-	
-
-	// open file
+	station_t *s = (station_t *)arg;
+	printf("station thread %d, socketfd %d\n", s->id, s->id);
 
 	// read and write from file
+	while (1) {
+		char buf[1024];
+		int to_len = sizeof(struct sockaddr);
+		size_t newLen = fread(buf, sizeof(char), 1024, s->file);
+		
+
+		// loop through client list for this station and send data
+		client_t *c;
+		for (c = clientLists[s->id]; c != NULL; c = c->next) {
+			//TODO: conceptual: why is this socket diff from listener socket?
+			// struct sockaddr_in *a = (struct sockaddr_in *)&c->cd->addr;
+			// a->sin_port = htons(c->cd->udpPort);
+			// printf("sending to socket %d\n", s->udpSocket);
+			if (sendto(s->udpSocket, "thank you", 9, 0, &c->cd->addr, to_len) < 0) { 
+				perror("sendto");
+				exit(1);
+			}
+		}
+		sleep(1);
+	}
+
+
 	// loop through client list for this station and write to each udpport
 	return 0;
 }
 
 void print_stations(FILE *f) {
 	for (int i = 0; i < numStations; i++) {
-		fprintf(f, "%d,%s", i, "station name");
+		fprintf(f, "%d,%s", i, stations[i].name);
 		client_t *c = clientLists[i];
 		while (c) {
 			struct sockaddr_in *addr_in = (struct sockaddr_in *)&(c->cd->addr);
@@ -226,7 +254,6 @@ void *repl_handler(void *arg) {
 				//idk
 			} else {
 				if (strcmp(tokens[0], "p\n") == 0) {
-					printf("here\n");
 					print_stations(stdout);
 				} else if (strcmp(tokens[0], "p") == 0 && num_tokens == 2) {
 					tokens[1][strcspn(tokens[1], "\n")] = 0;
@@ -316,7 +343,8 @@ int set_up_socket(int type, const char *port) {
 		}
 		close(lsocket);
     }
-	freeaddrinfo(servinfo);
+	// freeaddrinfo(servinfo);
+	// TODO: where to put this?
 
 	if (r == NULL) {
 		fprintf(stderr, "error connecting to the server\n");
@@ -339,8 +367,6 @@ int main(int argc, char **argv) {
 		return 0;
 	}
 
-	// input: port
-	// return: socket
 	numStations = argc - 2;
 	const char* port = argv[1];
 
@@ -377,20 +403,22 @@ int main(int argc, char **argv) {
         // handle_error_en(err, "pthread_detach");
     }
 
+	// Create threads for each station
 	pthread_t *station_threads = malloc(numStations * sizeof(pthread_t));
 	if (!station_threads) {
 		perror("malloc");
 		return 1;
 	}
 
-	// Create threads for each station
-	station_t *stations = malloc(numStations * sizeof(station_t));
-
+	stations = malloc(numStations * sizeof(station_t));
+	
 	for (int i = 0; i < numStations; i++) {
 		int err;
 		FILE *song = fopen(argv[i + 2], "r"); // may be NULL
 		stations[i].file = song;
 		stations[i].id = i;
+		stations[i].name = argv[i + 2];
+		stations[i].udpSocket = udpSocket;
 		if ((err = pthread_create(&station_threads[i], NULL, station_handler, (void *) &stations[i]))) {
 			// handle_error_en(err, "pthread_create");
 			fprintf(stderr, "pthread_create\n");
@@ -401,9 +429,9 @@ int main(int argc, char **argv) {
 			// handle_error_en(err, "pthread_detach");
 		}
 	}
+	
 
 	// Accept connections from clients and create thread for each client
-	// TODO: does this need to be in new thread to allow for server repl?
 	while (1) {
 		int csock;
 		struct sockaddr client_addr;
@@ -422,6 +450,14 @@ int main(int argc, char **argv) {
 		memset(cd, 0, sizeof(struct client_data));
 		cd->sock = csock;
 		memcpy(&cd->addr, &client_addr, client_len);
+
+		
+		struct sockaddr_in *sin = (struct sockaddr_in *)&client_addr;
+		uint16_t p;
+		p = htons (sin->sin_port);
+		printf ("client port is %d\n", p);
+
+
 		cd->addrSize = client_len;
 		cd->station = -1; // no station selected by default
 

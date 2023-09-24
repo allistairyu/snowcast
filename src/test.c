@@ -60,13 +60,13 @@ void print_stations() {
 }
 
 int main(int argc, char **argv) {
+	/*
 	numStations = 5;
 	lists = calloc(numStations, sizeof(node_t));
 	if (!lists) {
 		perror("malloc");
 		return 1;
 	}
-	// memset(lists, 0, numStations);
 
 	// lists: [0, 0, 0, 0, 0]
 
@@ -84,6 +84,11 @@ int main(int argc, char **argv) {
 	pull(n1, &lists[1]);
 	insert(n1, &lists[2]);
 	print_stations();
+
+	*/
+
+	const char *name = argv[1];
+	printf("%s\n", name);
 
 	return 0;
 }
