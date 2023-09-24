@@ -26,8 +26,8 @@ void receive_stream(int fd) {
 			perror("recvfrom");
 			exit(1);
 		}
-		buf[msg_size] = 0;
-		printf("server says: %s\n", buf);
+		buf[msg_size - 1] = 0;
+		printf("%s\n", buf);
 	}
 }
 

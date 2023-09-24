@@ -14,6 +14,8 @@
 
 int numStations;
 const int BUFLEN = 256;
+const int SONG_BUFLEN = 1024;
+const int STREAM_RATE = 16384;
 
 struct client_data {
 	int sock;
@@ -46,7 +48,7 @@ typedef struct Client {
 typedef struct Station {
 	FILE *file;
 	int id;
-	const char* name;
+	char* name;
 	int udpSocket;
 } station_t;
 
@@ -128,6 +130,129 @@ void client_constructor(struct client_data *cd) {
     }
 }
 
+/*
+ * start_routine for client
+ * input is client_t malloc'ed in client_constructor
+ * created and detached in client_constructor
+ */
+void *client_handler(void *c) {
+	client_t *client = (client_t *)c;
+	struct sockaddr_in *addr_in = (struct sockaddr_in *)&(client->cd->addr);
+	printf("session id %s:%d: new client connected; expecting HELLO\n", inet_ntoa(addr_in->sin_addr), client->cd->udpPort);
+	char buf[30] = {0};
+	int res;
+	if ((res = recv(client->cd->sock, buf, 3, 0)) < 0) { //TODO: change from 30
+		perror("recv");
+	} else {
+		int udpPort = (buf[1] << 8) + (buf[2] & 0xFF);
+		client->cd->udpPort = udpPort;
+
+		printf("session id %s:%d: HELLO received; sending WELCOME; expecting SET_STATION\n", inet_ntoa(addr_in->sin_addr), client->cd->udpPort);
+
+		int bytes_sent;
+		struct Welcome msg = {2, htons(numStations)};
+
+		bytes_sent = send(client->cd->sock, &msg, 3, 0);
+		if (!bytes_sent) {
+			perror("send");
+			return 0;
+		}
+	}
+
+	while (1) {
+		if ((res = recv(client->cd->sock, buf, 30, 0)) < 0) { // TODO: change from 30 do some error checking for malicious commands
+			perror("recv");
+		} else if (res == 0) {
+			printf("client closed connection\n");
+			// TODO: cleanup resources?
+			break;
+		} else {
+			int newStation = (buf[1] << 8) + (buf[2] & 0xFF);
+
+			printf("session id %s:%d: received SET_STATION to station %d\n", inet_ntoa(addr_in->sin_addr), client->cd->udpPort, newStation);
+
+			if (client->cd->station == -1) {
+				set_station(client, newStation);
+			} else {
+				change_station(client, newStation);
+			}
+		}
+	}
+
+	free(client);
+	return 0;
+}
+
+void serialize_general_message(char *buf, struct GeneralMessage *msg) {
+	buf[0] = msg->replyType;
+	buf[1] = msg->size;
+	for (int i = 0; i < msg->size; i++) {
+		buf[i + 2] = msg->content[i];
+	}
+}
+
+void *station_handler(void *arg) {
+	station_t *s = (station_t *)arg;
+
+	// read and write from file
+	while (1) {
+		char buf[SONG_BUFLEN];
+		int to_len = sizeof(struct sockaddr);
+		int bytes_read;
+		int announce = 0;
+
+		while (s->file) {
+			bytes_read = fread(buf, sizeof(char), SONG_BUFLEN, s->file);
+			if (bytes_read < SONG_BUFLEN) {
+				//TODO: announce song again
+				announce = 1;
+
+				if (fseek(s->file, 0, SEEK_SET) != 0) {
+					fprintf(stderr, "failed to reset file pointer\n");
+					break;
+				}
+			}
+
+			// loop through client list for this station and send data
+			client_t *c;
+			for (c = clientLists[s->id]; c != NULL; c = c->next) {
+				//TODO: conceptual: why is this socket diff from listener socket?
+				struct sockaddr_in *a = (struct sockaddr_in *)&c->cd->addr;
+				a->sin_port = htons(c->cd->udpPort);
+
+				if (announce) {
+					int nameLen = strlen(s->name);
+					struct GeneralMessage announcement = {3, (uint8_t)nameLen, s->name};
+					char *a = malloc(sizeof(char) * (nameLen + 2));
+					if (!a) {
+						perror("malloc");
+					}
+					
+					serialize_general_message(a, &announcement);
+					int bytes_sent;
+					bytes_sent = send(c->cd->sock, a, nameLen + 2, 0);
+					free(a);
+					if (!bytes_sent) {
+						perror("send");
+						return 0;
+					}
+					announce = 0;
+				}
+
+				if (sendto(s->udpSocket, buf, SONG_BUFLEN, 0, &c->cd->addr, to_len) < 0) { 
+					perror("sendto");
+					exit(1);
+				}
+			}
+			sleep(1/16); // change to 1/16
+		}
+	}
+
+
+	// loop through client list for this station and write to each udpport
+	return 0;
+}
+
 void *monitor_signal(void *arg) {
     // TODO: Wait for a SIGINT to be sent to the server process and cancel
     // all client threads when one arrives.
@@ -145,87 +270,6 @@ void *monitor_signal(void *arg) {
     }
 
     return NULL;
-}
-
-/*
- * start_routine for client
- * input is client_t malloc'ed in client_constructor
- * created and detached in client_constructor
- */
-void *client_handler(void *c) {
-	client_t *client = (client_t *)c;
-    
-	printf("Client connected!\n");
-	char buf[30] = {0};
-	int res;
-	if ((res = recv(client->cd->sock, buf, 3, 0)) < 0) { //TODO: change from 30
-		perror("recv");
-	} else {
-		int udpPort = (buf[1] << 8) + (buf[2] & 0xFF);
-		printf("udpPort is %d\n", udpPort);
-		client->cd->udpPort = udpPort;
-
-		int bytes_sent;
-		struct Welcome msg = {2, htons(numStations)};
-
-		bytes_sent = send(client->cd->sock, &msg, 3, 0);
-		if (!bytes_sent) {
-			perror("send");
-			return 0;
-		}
-	}
-
-	while (1) {
-		if ((res = recv(client->cd->sock, buf, 30, 0)) < 0) { // TODO: change from 30
-			perror("recv");
-		} else if (res == 0) {
-			printf("client closed connection\n");
-			// TODO: cleanup resources?
-			break;
-		} else {
-			int newStation = (buf[1] << 8) + (buf[2] & 0xFF);
-
-			if (client->cd->station == -1) {
-				set_station(client, newStation);
-			} else {
-				change_station(client, newStation);
-			}
-		}
-	}
-
-	free(client);
-	return 0;
-}
-
-void *station_handler(void *arg) {
-	station_t *s = (station_t *)arg;
-	printf("station thread %d, socketfd %d\n", s->id, s->id);
-
-	// read and write from file
-	while (1) {
-		char buf[1024];
-		int to_len = sizeof(struct sockaddr);
-		size_t newLen = fread(buf, sizeof(char), 1024, s->file);
-		
-
-		// loop through client list for this station and send data
-		client_t *c;
-		for (c = clientLists[s->id]; c != NULL; c = c->next) {
-			//TODO: conceptual: why is this socket diff from listener socket?
-			// struct sockaddr_in *a = (struct sockaddr_in *)&c->cd->addr;
-			// a->sin_port = htons(c->cd->udpPort);
-			// printf("sending to socket %d\n", s->udpSocket);
-			if (sendto(s->udpSocket, "thank you", 9, 0, &c->cd->addr, to_len) < 0) { 
-				perror("sendto");
-				exit(1);
-			}
-		}
-		sleep(1);
-	}
-
-
-	// loop through client list for this station and write to each udpport
-	return 0;
 }
 
 void print_stations(FILE *f) {
@@ -452,11 +496,9 @@ int main(int argc, char **argv) {
 		memcpy(&cd->addr, &client_addr, client_len);
 
 		
-		struct sockaddr_in *sin = (struct sockaddr_in *)&client_addr;
-		uint16_t p;
-		p = htons (sin->sin_port);
-		printf ("client port is %d\n", p);
-
+		// struct sockaddr_in *sin = (struct sockaddr_in *)&client_addr;
+		// uint16_t p;
+		// p = htons (sin->sin_port);
 
 		cd->addrSize = client_len;
 		cd->station = -1; // no station selected by default

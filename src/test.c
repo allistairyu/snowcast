@@ -3,92 +3,32 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <pthread.h>
+#include <unistd.h>
 
-int BUFLEN = 512;
-pthread_mutex_t *mutexes;
-
-typedef struct Node {
-	int val;
-	struct Node *next;
-	struct Node *prev;
-} node_t;
-
-node_t **lists;
-int numStations;
-
-void insert(node_t *c, node_t **head) {
-    if (!*head) {
-        c->next = c;
-        c->prev = c;
-    } else {
-        node_t *last = (*head)->prev;
-        c->next = *head;
-        c->prev = last;
-        last->next = c;
-        (*head)->prev = c;
-    }
-    *head = c;
-}
-
-void pull(node_t *c, node_t **head) {
-    if (c->prev == c) {
-        *head = NULL;
-    } else {
-        c->prev->next = c->next;
-        c->next->prev = c->prev;
-    }
-    if (c == *head) {
-        *head = c->prev;
-    }
-}
-
-void print_stations() {
-	printf("printing\n");
-	for (int i = 0; i < numStations; i++) {
-		printf("station %d: ", i);
-		node_t *n = lists[i];
-		node_t *start = n;
-		while (n) {
-			printf("%d,", n->val);
-			n = n->next;
-			if (n == start) {
-				break;
-			}
-		}
-		printf("\n");
-	}
-}
+const int BUFLEN = 20;
 
 int main(int argc, char **argv) {
-	/*
-	numStations = 5;
-	lists = calloc(numStations, sizeof(node_t));
-	if (!lists) {
-		perror("malloc");
+	char buf[BUFLEN];
+	FILE *f = fopen("../mp3/FX-Impact193.mp3", "r");
+	if (f == NULL) {
+		fprintf(stderr, "invalid file\n");
 		return 1;
 	}
+	int bytes_read;
+	while (1) {
+		bytes_read = fread(buf, sizeof(char), BUFLEN, f);
+		printf("read %d bytes", bytes_read);
+		printf("%.*s\n", (int)bytes_read, buf);
 
-	// lists: [0, 0, 0, 0, 0]
-
-	node_t *n1 = malloc(sizeof(node_t));
-	n1->val = 1;
-	n1->next = NULL;
-	n1->prev = NULL;
-	insert(n1, &lists[1]);
-	node_t *n2 = malloc(sizeof(node_t));
-	n2->val = 2;
-	insert(n2, &lists[1]);
-	print_stations();
-
-
-	pull(n1, &lists[1]);
-	insert(n1, &lists[2]);
-	print_stations();
-
-	*/
-
-	const char *name = argv[1];
-	printf("%s\n", name);
+		if (bytes_read < BUFLEN) {
+			printf("resetting pointer\n");
+			if (fseek(f, 0, SEEK_SET) != 0) {
+				fprintf(stderr, "failed to reset file pointer\n");
+				return 1;
+			}
+		}
+		sleep(.1);
+	}
 
 	return 0;
 }
