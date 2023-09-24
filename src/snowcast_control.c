@@ -160,6 +160,7 @@ int main(int argc, char** argv) {
 
 	uint16_t udpPort;
 	str_to_uint16(argv[3], &udpPort);
+	printf("udpPort is %u\n", udpPort);
 	struct Message msg = {0, htons(udpPort)};
 
 	int bytes_sent;
