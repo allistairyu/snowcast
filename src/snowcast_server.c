@@ -11,6 +11,7 @@
 #include <pthread.h>
 #include <assert.h>
 #include <signal.h>
+#include <sys/time.h>
 
 int numStations;
 const int BUFLEN = 256;
@@ -130,6 +131,34 @@ void client_constructor(struct client_data *cd) {
     }
 }
 
+void serialize_general_message(char *buf, struct GeneralMessage *msg) {
+	buf[0] = msg->replyType;
+	buf[1] = msg->size;
+	for (int i = 0; i < msg->size; i++) {
+		buf[i + 2] = msg->content[i];
+	}
+}
+
+int send_general_message(int socket, char *stationName, int replyType) {
+	int nameLen = strlen(stationName);
+	struct GeneralMessage announcement = {replyType, (uint8_t)nameLen, stationName};
+	char *msg = malloc(sizeof(char) * (nameLen + 2));
+	if (!msg) {
+		perror("malloc");
+		return 1;
+	}
+	
+	serialize_general_message(msg, &announcement);
+	int bytes_sent;
+	bytes_sent = send(socket, msg, nameLen + 2, 0);
+	free(msg);
+	if (!bytes_sent) {
+		perror("send");
+		return 1;
+	}
+	return 0;
+}
+
 /*
  * start_routine for client
  * input is client_t malloc'ed in client_constructor
@@ -139,6 +168,16 @@ void *client_handler(void *c) {
 	client_t *client = (client_t *)c;
 	struct sockaddr_in *addr_in = (struct sockaddr_in *)&(client->cd->addr);
 	printf("session id %s:%d: new client connected; expecting HELLO\n", inet_ntoa(addr_in->sin_addr), client->cd->udpPort);
+
+	// set timeout sockopt
+	struct timeval tv = {
+		.tv_usec = 100000
+	};
+	if (setsockopt(client->cd->sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+		fprintf(stderr, "setsockopt 1\n");
+		pthread_exit((void *) 1);
+	}
+
 	char buf[30] = {0};
 	int res;
 	if ((res = recv(client->cd->sock, buf, 3, 0)) < 0) { //TODO: change from 30
@@ -158,37 +197,64 @@ void *client_handler(void *c) {
 			return 0;
 		}
 	}
+	tv.tv_usec = 0;
+	if (setsockopt(client->cd->sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+		fprintf(stderr, "setsockopt 1\n");
+		pthread_exit((void *) 1);
+	}
+
 
 	while (1) {
-		if ((res = recv(client->cd->sock, buf, 30, 0)) < 0) { // TODO: change from 30 do some error checking for malicious commands
+		int count = 0;
+		int total = 0;
+		if ((count = recv(client->cd->sock, buf, 30, 0)) < 0) { // TODO: change from 30 do some error checking for malicious commands
+			fprintf(stderr, "here?\n");
 			perror("recv");
-		} else if (res == 0) {
+		} else if (count == 0) {
 			printf("client closed connection\n");
 			// TODO: cleanup resources?
 			break;
 		} else {
+			total += count;
+
+			// TODO: refactor
+			// check if additional Hello message
+			if (buf[0] == 0) {
+				char invalid_msg[] = "Only one Hello message must be sent.";
+				send_general_message(client->cd->sock, invalid_msg, 4);
+				continue;
+			} else if (buf[0] != 1) {
+				char invalid_msg[40];
+				sprintf(invalid_msg, "Unknown command type: %d", buf[0]);
+				send_general_message(client->cd->sock, invalid_msg, 4);
+				continue;
+			}
 			int newStation = (buf[1] << 8) + (buf[2] & 0xFF);
 
-			printf("session id %s:%d: received SET_STATION to station %d\n", inet_ntoa(addr_in->sin_addr), client->cd->udpPort, newStation);
-
-			if (client->cd->station == -1) {
-				set_station(client, newStation);
+			if (newStation < 0 || newStation >= numStations) {
+				// send invalid commmand
+				char invalid_msg[40];
+				sprintf(invalid_msg, "Station %d does not exist.", newStation);
+				send_general_message(client->cd->sock, invalid_msg, 4);
+				break; // kill this thread?
 			} else {
-				change_station(client, newStation);
+				printf("session id %s:%d: received SET_STATION to station %d\n", inet_ntoa(addr_in->sin_addr), client->cd->udpPort, newStation);
+
+				send_general_message(client->cd->sock, stations[newStation].name, 4);
+
+				if (client->cd->station == -1) {
+					set_station(client, newStation);
+				} else {
+					change_station(client, newStation);
+				}
 			}
+
+			
 		}
 	}
 
 	free(client);
 	return 0;
-}
-
-void serialize_general_message(char *buf, struct GeneralMessage *msg) {
-	buf[0] = msg->replyType;
-	buf[1] = msg->size;
-	for (int i = 0; i < msg->size; i++) {
-		buf[i + 2] = msg->content[i];
-	}
 }
 
 void *station_handler(void *arg) {
@@ -221,21 +287,7 @@ void *station_handler(void *arg) {
 				a->sin_port = htons(c->cd->udpPort);
 
 				if (announce) {
-					int nameLen = strlen(s->name);
-					struct GeneralMessage announcement = {3, (uint8_t)nameLen, s->name};
-					char *a = malloc(sizeof(char) * (nameLen + 2));
-					if (!a) {
-						perror("malloc");
-					}
-					
-					serialize_general_message(a, &announcement);
-					int bytes_sent;
-					bytes_sent = send(c->cd->sock, a, nameLen + 2, 0);
-					free(a);
-					if (!bytes_sent) {
-						perror("send");
-						return 0;
-					}
+					send_general_message(c->cd->sock, s->name, 3);
 					announce = 0;
 				}
 
@@ -244,7 +296,7 @@ void *station_handler(void *arg) {
 					exit(1);
 				}
 			}
-			sleep(1/16); // change to 1/16
+			sleep(1); // change to 1/16
 		}
 	}
 
@@ -387,7 +439,7 @@ int set_up_socket(int type, const char *port) {
 		}
 		close(lsocket);
     }
-	// freeaddrinfo(servinfo);
+	freeaddrinfo(servinfo);
 	// TODO: where to put this?
 
 	if (r == NULL) {
@@ -404,6 +456,8 @@ int set_up_socket(int type, const char *port) {
 	return lsocket;
 }
 
+
+//TODO: all error returns must clean up resources..
 int main(int argc, char **argv) {
 
 	if (argc < 3) {
@@ -448,13 +502,17 @@ int main(int argc, char **argv) {
     }
 
 	// Create threads for each station
-	pthread_t *station_threads = malloc(numStations * sizeof(pthread_t));
+	pthread_t *station_threads = malloc(numStations * sizeof(pthread_t *));
 	if (!station_threads) {
 		perror("malloc");
 		return 1;
 	}
 
 	stations = malloc(numStations * sizeof(station_t));
+	if (!stations) {
+		perror("malloc");
+		return 1;
+	}
 	
 	for (int i = 0; i < numStations; i++) {
 		int err;
@@ -473,6 +531,7 @@ int main(int argc, char **argv) {
 			// handle_error_en(err, "pthread_detach");
 		}
 	}
+
 	
 
 	// Accept connections from clients and create thread for each client
@@ -481,11 +540,23 @@ int main(int argc, char **argv) {
 		struct sockaddr client_addr;
 		socklen_t client_len = sizeof(client_addr);
 
+		// set timeout sockopt TODO: before or after accept? also, does not
+		// account for receiving 1 byte of Hello message resetting the timer i think
+		
+
 		csock = accept(tcpSocket, &client_addr, &client_len);
 		if (csock == -1) {
 			perror("accept");
 			return 1;
 		}
+		// struct timeval tv = {
+		// 	.tv_usec = 100000
+		// };
+		// if (setsockopt(csock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+		// 	fprintf(stderr, "setsockopt 2\n");
+			
+		// 	return 1;
+		// }
 		struct client_data *cd = (struct client_data *)malloc(sizeof(struct client_data));
 		if (!cd) {
 			perror("malloc");
@@ -509,10 +580,14 @@ int main(int argc, char **argv) {
 	// https://stackoverflow.com/questions/449617/how-should-i-close-a-socket-in-a-signal-handler
 
 
+
 	for (int i = 0; i < numStations; i++) {
 		pthread_mutex_destroy(&clientListMutexes[i]);
+		// free(station_threads[i]);
+
 	}
 	free(station_threads);
+	free(stations);
 	close(tcpSocket);
 
 	return 0;
