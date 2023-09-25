@@ -206,7 +206,7 @@ int main(int argc, char** argv) {
 			numStations += buf[2] & 0xFF;
 			printf("Welcome to Snowcast! The server has %d stations.\n", numStations);
 			fflush(stdout);
-			wait = 1;
+			wait = 0;
 			pthread_cond_signal(&welcomeCond);
 		} else {
 			return 1;
@@ -240,11 +240,13 @@ int main(int argc, char** argv) {
 				fprintf(stderr, "Received more than one Welcome message\n");
 				break;
 			} else if (messageType == 3) {
-				int msg_size = new_buf[1];
-				new_buf[2 + msg_size] = 0;
-				printf("New song announced: %.*s\n", msg_size, &new_buf[2]);
 				pthread_mutex_lock(&welcomeMutex);
-				wait = 1;
+				if (wait) {
+					int msg_size = new_buf[1];
+					new_buf[2 + msg_size] = 0;
+					printf("New song announced: %.*s\n", msg_size, &new_buf[2]);
+					wait = 0;
+				}
 				pthread_mutex_unlock(&welcomeMutex);
 				pthread_cond_signal(&welcomeCond);
 
