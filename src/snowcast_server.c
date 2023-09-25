@@ -213,80 +213,82 @@ void *client_handler(void *c) {
 
 	char buf[3] = {0};
 	int res;
-	if ((res = recv(client->cd->sock, buf, 3, MSG_WAITALL)) < 0) { //TODO: buf size 3?
+	if ((res = recv(client->cd->sock, buf, 3, 0)) < 0) {
 		perror("recv");
-	} else {
-		if (res == 3 && buf[0] == 0) {
+	} else if (res == 3 && buf[0] == 0) {
+		uint16_t firstByte = buf[1] << 8;
+		uint8_t secByte = buf[2] & 0xFF;
+		uint16_t udpPort = firstByte + secByte;
+		client->cd->udpPort = udpPort;
 
-			uint16_t firstByte = buf[1] << 8;
-			uint8_t secByte = buf[2] & 0xFF;
-			uint16_t udpPort = firstByte + secByte;
-			client->cd->udpPort = udpPort;
+		printf("session id %s:%d: HELLO received; sending WELCOME; expecting SET_STATION\n", inet_ntoa(addr_in->sin_addr), port);
 
-			printf("session id %s:%d: HELLO received; sending WELCOME; expecting SET_STATION\n", inet_ntoa(addr_in->sin_addr), port);
+		int bytes_sent;
+		struct Welcome msg = {2, htons(numStations)};
 
-			int bytes_sent;
-			struct Welcome msg = {2, htons(numStations)};
+		bytes_sent = send(client->cd->sock, &msg, 3, 0);
+		if (!bytes_sent) {
+			perror("send");
+			return 0;
+		}
 
-			bytes_sent = send(client->cd->sock, &msg, 3, 0);
-			if (!bytes_sent) {
-				perror("send");
-				return 0;
-			}
+		struct timeval tv = {
+			.tv_usec = 0
+		};
+		if (setsockopt(client->cd->sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+			fprintf(stderr, "setsockopt 1\n");
+			pthread_exit((void *) 1);
+		}
 
-			struct timeval tv = {
-				.tv_usec = 0
-			};
-			if (setsockopt(client->cd->sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-				fprintf(stderr, "setsockopt 1\n");
-				pthread_exit((void *) 1);
-			}
+		// send_general_message(client->cd->sock, "asdf", 4);
 
-			// send_general_message(client->cd->sock, "asdf", 3);
+		while (1) {
+			int count = 0;
+			// send_general_message(client->cd->sock, "asdf", 4);
 
-			while (1) {
-				int count = 0;
-				if ((count = recv(client->cd->sock, buf, 3, MSG_WAITALL)) < 0) {
-					// fprintf(stderr, "here?\n");
-					perror("recv");
-				} else if (count == 0) {
-					printf("client closed connection\n");
-					// TODO: cleanup resources?
+			if ((count = recv(client->cd->sock, buf, 3, MSG_WAITALL)) < 0) {
+				// fprintf(stderr, "here?\n");
+				perror("recv");
+				break;
+			} else if (count == 0) {
+				printf("client closed connection\n");
+				// TODO: cleanup resources?
+				break;
+			} else {
+				if (count < 3) {
+					break;
+				}
+				// send_general_message(client->cd->sock, "asdf", 4);
+
+				// TODO: refactor
+				// check if additional Hello message
+				if (buf[0] == 0) {
+					char invalid_msg[] = "Only one Hello message can be sent from a client.";
+					send_general_message(client->cd->sock, invalid_msg, 4);
+					break;
+				} else if (buf[0] != 1) {
+					char invalid_msg[40];
+					sprintf(invalid_msg, "Unknown command type: %d", buf[0]);
+					send_general_message(client->cd->sock, invalid_msg, 4);
+					break;
+				}
+				int newStation = (buf[1] << 8) + (buf[2] & 0xFF);
+
+				if (newStation < 0 || newStation >= numStations) {
+					// send invalid commmand
+					char invalid_msg[40];
+					sprintf(invalid_msg, "Station %d does not exist.", newStation);
+					send_general_message(client->cd->sock, invalid_msg, 4);
 					break;
 				} else {
-					if (count < 3) {
-						break;
-					}
-					// TODO: refactor
-					// check if additional Hello message
-					if (buf[0] == 0) {
-						char invalid_msg[] = "Only one Hello message can be sent from a client.";
-						send_general_message(client->cd->sock, invalid_msg, 4);
-						break;
-					} else if (buf[0] != 1) {
-						char invalid_msg[40];
-						sprintf(invalid_msg, "Unknown command type: %d", buf[0]);
-						send_general_message(client->cd->sock, invalid_msg, 4);
-						break;
-					}
-					int newStation = (buf[1] << 8) + (buf[2] & 0xFF);
-
-					if (newStation < 0 || newStation >= numStations) {
-						// send invalid commmand
-						char invalid_msg[40];
-						sprintf(invalid_msg, "Station %d does not exist.", newStation);
-						send_general_message(client->cd->sock, invalid_msg, 4);
-						break;
+					printf("session id %s:%d: received SET_STATION to station %d\n", inet_ntoa(addr_in->sin_addr), client->cd->udpPort, newStation);
+					send_general_message(client->cd->sock, stations[newStation].name, 3);
+					if (client->cd->station == -1) {
+						set_station(client, newStation);
 					} else {
-						printf("session id %s:%d: received SET_STATION to station %d\n", inet_ntoa(addr_in->sin_addr), client->cd->udpPort, newStation);
-						send_general_message(client->cd->sock, stations[newStation].name, 3);
-						if (client->cd->station == -1) {
-							set_station(client, newStation);
-						} else {
-							change_station(client, newStation);
-						}
-					}					
-				}
+						change_station(client, newStation);
+					}
+				}					
 			}
 		}
 	}
@@ -577,6 +579,7 @@ int main(int argc, char **argv) {
 				break;
 			}
 			perror("accept");
+			
 			return 1;
 		}
 		struct timeval tv = {

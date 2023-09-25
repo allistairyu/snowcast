@@ -14,9 +14,11 @@
 #include <signal.h>
 
 const int BUFLEN = 256;
-int welcomeFlag = 0;
 pthread_mutex_t welcomeMutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t welcomeCond = PTHREAD_COND_INITIALIZER;
+int wait = 1;
+int stationFlag = 0;
+
 
 struct Message {
 	uint8_t commandType;
@@ -67,19 +69,18 @@ int isnumber(char *s) {
 	return 1;
 }
 
-// repl
 void *repl_handler(void *arg) {
 	int sock = *(int *)arg;
 	while (1) {
 		pthread_mutex_lock(&welcomeMutex);
-		while (!welcomeFlag) {
+		while (wait) {
 			pthread_cond_wait(&welcomeCond, &welcomeMutex);
 		}
 		pthread_mutex_unlock(&welcomeMutex);
+
 		printf("> ");
 
-		// get input
-        char buffer[BUFLEN];
+		char buffer[BUFLEN];
         if (fgets(buffer, BUFLEN, stdin) != NULL) {
             // parse input
             char *tokens[BUFLEN];
@@ -108,13 +109,17 @@ void *repl_handler(void *arg) {
 						perror("send station change");
 						return 0;
 					}
+					stationFlag = 1;
 					printf("Waiting for an announce...\n");
+					pthread_mutex_lock(&welcomeMutex);
+					wait = 1;
+					pthread_mutex_unlock(&welcomeMutex);
 				}
 			}
         } else {
-            // TODO: exit gracefully...
+            close(sock);
+			return 0;
         }
-
 	}
 	return 0;
 }
@@ -179,8 +184,6 @@ int main(int argc, char** argv) {
 	}
 
 	int res;
-
-	int stationFlag = -1;
 	struct timeval tv = {
 		.tv_usec = 100000
 	};
@@ -199,48 +202,58 @@ int main(int argc, char** argv) {
 		}
 		int messageType = buf[0];
 		if (messageType == 2) {
-			pthread_mutex_lock(&welcomeMutex);
-			welcomeFlag = 1;
-			pthread_mutex_unlock(&welcomeMutex);
-			pthread_cond_signal(&welcomeCond);
 			uint16_t numStations = buf[1] << 8;
 			numStations += buf[2] & 0xFF;
 			printf("Welcome to Snowcast! The server has %d stations.\n", numStations);
+			fflush(stdout);
+			wait = 1;
+			pthread_cond_signal(&welcomeCond);
 		} else {
 			return 1;
 		}
 	}
 
-	// while (1) {
-	// 	// set station flag
-	// 	//TODO: does first message need to be a welcome
-	// 	if ((res = recv(sock, buf, 3, MSG_WAITALL)) < 0) {
-	// 		perror("recv");
-	// 		return 1;
-	// 	} else {
-	// 		int messageType = buf[0];
-	// 		if (messageType < 2 || messageType > 4) {
-	// 			fprintf(stderr, "Received invalid message type.\n");
-	// 			break;
-	// 		} else if (messageType == 4) {
-	// 			fprintf(stderr, "Received invalid command response.\n");
-	// 			break;
-	// 		} else if (messageType == 3 && stationFlag < 0) {
-	// 			fprintf(stderr, "Announcement received before client station has been set.\n");
-	// 			break;
-	// 		} else if (messageType == 2 && welcomeFlag) {
-	// 			fprintf(stderr, "Received more than one Welcome message\n");
-	// 			break;
-	// 		} else if (messageType == 3) {
-	// 			int msg_size = buf[1];
-	// 			printf("New song announced: %.*s\n", msg_size, &buf[2]);
-	// 		}
-	// 	}
-	// }
+	tv.tv_usec = 0;
+	if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+		fprintf(stderr, "setsockopt\n");
+		return 1;
+	}
+	int stationFlag = 0;
+	char new_buf[80];
+	while (1) {
+		//TODO: does first message need to be a welcome
+		if ((res = recv(sock, new_buf, 80, 0)) < 0) {
+			perror("recv");
+			return 1;
+		} else {
+			int messageType = new_buf[0];
+			if (messageType < 2 || messageType > 4) {
+				fprintf(stderr, "Received invalid message type.\n");
+				break;
+			} else if (messageType == 4) {
+				fprintf(stderr, "Received invalid command response.\n");
+				break;
+			// } else if (messageType == 3 && !stationFlag) {
+			// 	fprintf(stderr, "Announcement received before client station has been set.\n");
+			// 	break;
+			} else if (messageType == 2) {
+				fprintf(stderr, "Received more than one Welcome message\n");
+				break;
+			} else if (messageType == 3) {
+				int msg_size = new_buf[1];
+				new_buf[2 + msg_size] = 0;
+				printf("New song announced: %.*s\n", msg_size, &new_buf[2]);
+				pthread_mutex_lock(&welcomeMutex);
+				wait = 1;
+				pthread_mutex_unlock(&welcomeMutex);
+				pthread_cond_signal(&welcomeCond);
+
+			}
+		}
+	}
 	
 	// TODO: figure out how to close socket in case of SIGINT, EOF, etc.
 	// https://stackoverflow.com/questions/449617/how-should-i-close-a-socket-in-a-signal-handler
 	close(sock);
-
 	return 0;
 }

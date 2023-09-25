@@ -48,10 +48,7 @@ int main(int argc, char **argv) {
 	hints.ai_family = AF_INET;
 	hints.ai_socktype = SOCK_DGRAM;
 
-	char hostname[80];
-	gethostname(hostname, 80);
-	
-	if ((s = getaddrinfo("localhost", argv[1], &hints, &result)) != 0) { // TODO: addr? gethostname + getaddrinfo? beej
+	if ((s = getaddrinfo("0.0.0.0", argv[1], &hints, &result)) != 0) {
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
 	}
 
