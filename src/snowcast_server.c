@@ -195,7 +195,7 @@ int send_general_message(int socket, char *stationName, int replyType) {
 		perror("send");
 		return 1;
 	}
-	return 0;
+	return bytes_sent;
 }
 
 /*
@@ -241,6 +241,8 @@ void *client_handler(void *c) {
 				fprintf(stderr, "setsockopt 1\n");
 				pthread_exit((void *) 1);
 			}
+
+			// send_general_message(client->cd->sock, "asdf", 3);
 
 			while (1) {
 				int count = 0;
@@ -304,7 +306,7 @@ void *station_handler(void *arg) {
 		int announce = 0;
 		struct timespec tim, tim2;
 		tim.tv_sec  = 0;
-		tim.tv_nsec = 62500000L;
+		tim.tv_nsec = 62500000L; 
 		while (s->file) {
 			bytes_read = fread(buf, sizeof(char), SONG_BUFLEN, s->file);
 			if (bytes_read < SONG_BUFLEN) {
@@ -365,7 +367,6 @@ void print_stations(FILE *f) {
 }
 
 void *repl_handler(void *arg) {
-	printf("here\n");
 	while (1) {
 		char buffer[BUFLEN];
 		if (fgets(buffer, BUFLEN, stdin) != NULL) {

@@ -11,12 +11,12 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <pthread.h>
+#include <signal.h>
 
 const int BUFLEN = 256;
 int welcomeFlag = 0;
 pthread_mutex_t welcomeMutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t welcomeCond = PTHREAD_COND_INITIALIZER;
-
 
 struct Message {
 	uint8_t commandType;
@@ -67,46 +67,54 @@ int isnumber(char *s) {
 	return 1;
 }
 
-void *listener_handler(void *arg) {
-	int res;
-	int numStations = 0;
-
-	int stationFlag = -1;
-	struct timeval tv = {
-		.tv_sec = .1
-	};
-	if (setsockopt(*(int *)arg, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-		fprintf(stderr, "setsockopt\n");
-		pthread_exit((void *) 1);
-	}
-
-	char buf[3];// TODO: what size should buf be?
-	if ((res = recv(*(int *)arg, buf, 3, 0)) < 0) {
-		perror("recv");
-	} else {
-		// set station flag
-		//TODO: does first message need to be a welcome
-		int messageType = buf[0];
-		if (messageType < 2 || messageType > 4) {
-			fprintf(stderr, "Received invalid message type.\n");
-			pthread_exit((void *)1);
-		} else if (messageType == 4) {
-			fprintf(stderr, "Received invalid command response.\n");
-			pthread_exit((void *)1);
-		} else if (messageType == 3 && stationFlag < 0) {
-			fprintf(stderr, "Announcement received before client station has been set.\n");
-			pthread_exit((void *)1);
-		} else if (messageType == 2 && welcomeFlag) {
-			fprintf(stderr, "Received more than one Welcome message\n");
-			pthread_exit((void *)1);
-		} else if (messageType == 2) {
-			pthread_mutex_lock(&welcomeMutex);
-			welcomeFlag = 1;
-			pthread_mutex_unlock(&welcomeMutex);
-			pthread_cond_signal(&welcomeCond);
-			numStations = (buf[1] << 8) + (buf[2] & 0xFF);
-			printf("Welcome to Snowcast! The server has %d stations.\n", numStations);
+// repl
+void *repl_handler(void *arg) {
+	int sock = *(int *)arg;
+	while (1) {
+		pthread_mutex_lock(&welcomeMutex);
+		while (!welcomeFlag) {
+			pthread_cond_wait(&welcomeCond, &welcomeMutex);
 		}
+		pthread_mutex_unlock(&welcomeMutex);
+		printf("> ");
+
+		// get input
+        char buffer[BUFLEN];
+        if (fgets(buffer, BUFLEN, stdin) != NULL) {
+            // parse input
+            char *tokens[BUFLEN];
+            int num_tokens = parse(buffer, tokens);
+
+			// TODO: refactor
+			if (num_tokens == -1) {
+				fprintf(stderr, "eof?\n");
+				return 0;
+			} else if (num_tokens == 0 || num_tokens > 1) {
+				printf("Invalid input: number or 'q' expected\n");
+			} else {
+				if (strcmp(tokens[0], "q\n") == 0) {
+					break;
+				}
+				char *end;
+				tokens[0][strcspn(tokens[0], "\n")] = 0;
+				if (!isnumber(tokens[0])) {
+					printf("Invalid input: number or 'q' expected\n");
+				} else {
+					const long i = strtol(tokens[0], &end, 10);
+					// send request to switch to station i
+					struct Message stationChange = {1, htons((uint16_t) i)};
+					int bytes_sent = send(sock, &stationChange, 3, 0);
+					if (!bytes_sent) {
+						perror("send station change");
+						return 0;
+					}
+					printf("Waiting for an announce...\n");
+				}
+			}
+        } else {
+            // TODO: exit gracefully...
+        }
+
 	}
 	return 0;
 }
@@ -142,25 +150,25 @@ int main(int argc, char** argv) {
 		close(sock);
 	}
 	if (rp == NULL) {
+		freeaddrinfo(result);
+		close(sock);
 		fprintf(stderr, "Could not connect to localhost\n");
 		return 1;
 	}
 	freeaddrinfo(result);
 
-	pthread_t listener_thread;
-	if (pthread_create(&listener_thread, NULL, listener_handler, (void *)&sock)) {
+	pthread_t repl_thread;
+	if (pthread_create(&repl_thread, NULL, repl_handler, (void *)&sock)) {
 		fprintf(stderr, "pthread_create\n");//TODO: when to use fprintf vs perror
 		return 1;
 	}
-	if (pthread_detach(listener_thread)) {
+	if (pthread_detach(repl_thread)) {
 		fprintf(stderr, "pthread_detach\n");
 		return 1;
-		// handle_error_en(err, "pthread_detach");
 	}
 
 	uint16_t udpPort;
 	str_to_uint16(argv[3], &udpPort);
-	printf("udpPort is %u\n", udpPort);
 	struct Message msg = {0, htons(udpPort)};
 
 	int bytes_sent;
@@ -170,51 +178,66 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 
-	while (1) {
-		pthread_mutex_lock(&welcomeMutex);
-		while (!welcomeFlag) {
-			pthread_cond_wait(&welcomeCond, &welcomeMutex);
-		}
-		pthread_mutex_unlock(&welcomeMutex);
-		printf("> ");
+	int res;
 
-		// get input
-        char buffer[BUFLEN];
-        if (fgets(buffer, BUFLEN, stdin) != NULL) {
-            // parse input
-            char *tokens[BUFLEN];
-            int num_tokens = parse(buffer, tokens);
-
-			// TODO: refactor
-			if (num_tokens == -1) {
-				fprintf(stderr, "eof?\n");
-				return 1;
-			} else if (num_tokens == 0 || num_tokens > 1) {
-				printf("Invalid input: number or 'q' expected\n");
-			} else {
-				if (strcmp(tokens[0], "q\n") == 0) {
-					break;
-				}
-				char *end;
-				tokens[0][strcspn(tokens[0], "\n")] = 0;
-				if (!isnumber(tokens[0])) {
-					printf("Invalid input: number or 'q' expected\n");
-				} else {
-					const long i = strtol(tokens[0], &end, 10);
-					// send request to switch to station i
-					struct Message stationChange = {1, htons((uint16_t) i)};
-					bytes_sent = send(sock, &stationChange, 3, 0);
-					if (!bytes_sent) {
-						perror("send station change");
-						return 1;
-					}
-				}
-			}
-        } else {
-            // TODO: exit gracefully...
-        }
-
+	int stationFlag = -1;
+	struct timeval tv = {
+		.tv_usec = 100000
+	};
+	if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+		fprintf(stderr, "setsockopt\n");
+		return 1;
 	}
+
+	char buf[3];
+	if ((res = recv(sock, buf, 3, 0)) < 0) {
+		perror("recv");
+		return 1;
+	} else {
+		if (res < 3) {
+			return 1;
+		}
+		int messageType = buf[0];
+		if (messageType == 2) {
+			pthread_mutex_lock(&welcomeMutex);
+			welcomeFlag = 1;
+			pthread_mutex_unlock(&welcomeMutex);
+			pthread_cond_signal(&welcomeCond);
+			uint16_t numStations = buf[1] << 8;
+			numStations += buf[2] & 0xFF;
+			printf("Welcome to Snowcast! The server has %d stations.\n", numStations);
+		} else {
+			return 1;
+		}
+	}
+
+	// while (1) {
+	// 	// set station flag
+	// 	//TODO: does first message need to be a welcome
+	// 	if ((res = recv(sock, buf, 3, MSG_WAITALL)) < 0) {
+	// 		perror("recv");
+	// 		return 1;
+	// 	} else {
+	// 		int messageType = buf[0];
+	// 		if (messageType < 2 || messageType > 4) {
+	// 			fprintf(stderr, "Received invalid message type.\n");
+	// 			break;
+	// 		} else if (messageType == 4) {
+	// 			fprintf(stderr, "Received invalid command response.\n");
+	// 			break;
+	// 		} else if (messageType == 3 && stationFlag < 0) {
+	// 			fprintf(stderr, "Announcement received before client station has been set.\n");
+	// 			break;
+	// 		} else if (messageType == 2 && welcomeFlag) {
+	// 			fprintf(stderr, "Received more than one Welcome message\n");
+	// 			break;
+	// 		} else if (messageType == 3) {
+	// 			int msg_size = buf[1];
+	// 			printf("New song announced: %.*s\n", msg_size, &buf[2]);
+	// 		}
+	// 	}
+	// }
+	
 	// TODO: figure out how to close socket in case of SIGINT, EOF, etc.
 	// https://stackoverflow.com/questions/449617/how-should-i-close-a-socket-in-a-signal-handler
 	close(sock);
