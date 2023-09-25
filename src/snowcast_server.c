@@ -137,6 +137,7 @@ void client_constructor(struct client_data *cd) {
 }
 
 void client_destructor(client_t *client) {
+	printf("closing client\n");
 	close(client->cd->sock);
     free(client->cd);
     free(client);
@@ -212,7 +213,7 @@ void *client_handler(void *c) {
 
 	char buf[3] = {0};
 	int res;
-	if ((res = recv(client->cd->sock, buf, 3, 0)) < 0) { //TODO: buf size 3?
+	if ((res = recv(client->cd->sock, buf, 3, MSG_WAITALL)) < 0) { //TODO: buf size 3?
 		perror("recv");
 	} else {
 		if (res == 3 && buf[0] == 0) {
@@ -243,7 +244,7 @@ void *client_handler(void *c) {
 
 			while (1) {
 				int count = 0;
-				if ((count = recv(client->cd->sock, buf, 3, 0)) < 0) { // TODO: change from 30 do some error checking for malicious commands
+				if ((count = recv(client->cd->sock, buf, 3, MSG_WAITALL)) < 0) {
 					// fprintf(stderr, "here?\n");
 					perror("recv");
 				} else if (count == 0) {
@@ -282,9 +283,7 @@ void *client_handler(void *c) {
 						} else {
 							change_station(client, newStation);
 						}
-					}
-
-					
+					}					
 				}
 			}
 		}
@@ -303,7 +302,9 @@ void *station_handler(void *arg) {
 		int to_len = sizeof(struct sockaddr);
 		int bytes_read;
 		int announce = 0;
-
+		struct timespec tim, tim2;
+		tim.tv_sec  = 0;
+		tim.tv_nsec = 62500000L;
 		while (s->file) {
 			bytes_read = fread(buf, sizeof(char), SONG_BUFLEN, s->file);
 			if (bytes_read < SONG_BUFLEN) {
@@ -333,7 +334,11 @@ void *station_handler(void *arg) {
 					exit(1);
 				}
 			}
-			sleep(1); // change to 1/16
+			
+			if (nanosleep(&tim, &tim2) < 0) {
+				printf("Nano sleep system call failed \n");
+				exit(1);
+			}
 		}
 	}
 

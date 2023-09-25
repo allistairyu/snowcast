@@ -27,7 +27,7 @@ void receive_stream(int fd) {
 			exit(1);
 		}
 		buf[msg_size - 1] = 0;
-		printf("%s\n", buf);
+		fwrite(buf, 1, msg_size, stdout);
 	}
 }
 
