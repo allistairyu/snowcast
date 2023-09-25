@@ -5,6 +5,7 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 TESTER_DIR=${SCRIPT_DIR}/tester
 DATA_DIR=${TESTER_DIR}/data
 MP3_DIR=${SCRIPT_DIR}/../mp3
+TESTER_TIMEOUT="300s"
 
 # Set automatically
 arch="`uname -m`"
@@ -82,10 +83,11 @@ run_tester() {
 	failflag="-test.failfast"
     fi
 
+    timeoutflag="-test.timeout ${TESTER_TIMEOUT}"
     export BIN_DIR=${bin_dir}
     export MP3_DIR=$MP3_DIR
     export DATA_DIR=$DATA_DIR
-    ${tester_path}/${tester_name} $vflag $failflag $@
+    ${tester_path}/${tester_name} $vflag $failflag $timeoutflag $@
 }
 
 do_server() {
