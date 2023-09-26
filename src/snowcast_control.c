@@ -18,6 +18,8 @@ pthread_mutex_t welcomeMutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t welcomeCond = PTHREAD_COND_INITIALIZER;
 int wait = 1;
 int stationFlag = 0;
+pthread_mutex_t stationMutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t stationCond = PTHREAD_COND_INITIALIZER;
 
 
 struct Message {
@@ -109,18 +111,18 @@ void *repl_handler(void *arg) {
 						perror("send station change");
 						return 0;
 					}
+					pthread_mutex_lock(&stationMutex);
 					stationFlag = 1;
+					pthread_mutex_unlock(&stationMutex);
 					printf("Waiting for an announce...\n");
 					pthread_mutex_lock(&welcomeMutex);
 					wait = 1;
 					pthread_mutex_unlock(&welcomeMutex);
 				}
 			}
-        } else {
-            close(sock);
-			return 0;
         }
 	}
+	close(sock);
 	return 0;
 }
 
@@ -197,10 +199,13 @@ int main(int argc, char** argv) {
 		perror("recv");
 		return 1;
 	} else {
-		if (res < 3) {
-			return 1;
-		}
 		int messageType = buf[0];
+		if (res < 3) {
+			if ((res = recv(sock, &buf[res], 3 - res, MSG_WAITALL)) < 0) {
+				perror("recv");
+				return 1;
+			}
+		}
 		if (messageType == 2) {
 			uint16_t numStations = buf[1] << 8;
 			numStations += buf[2] & 0xFF;
@@ -209,44 +214,59 @@ int main(int argc, char** argv) {
 			wait = 0;
 			pthread_cond_signal(&welcomeCond);
 		} else {
-			return 1;
+			close(sock);
+			return 0;
 		}
 	}
 
-	tv.tv_usec = 0;
-	if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-		fprintf(stderr, "setsockopt\n");
-		return 1;
-	}
-	int stationFlag = 0;
 	char new_buf[80];
 	while (1) {
 		//TODO: does first message need to be a welcome
-		if ((res = recv(sock, new_buf, 80, 0)) < 0) {
+		tv.tv_usec = 0;
+		if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+			fprintf(stderr, "setsockopt\n");
+			return 1;
+		}
+		if ((res = recv(sock, new_buf, 2, MSG_WAITALL)) < 0) {
 			perror("recv");
 			return 1;
 		} else {
 			int messageType = new_buf[0];
+			printf("here\n");
 			if (messageType < 2 || messageType > 4) {
 				fprintf(stderr, "Received invalid message type.\n");
 				break;
 			} else if (messageType == 4) {
 				fprintf(stderr, "Received invalid command response.\n");
 				break;
-			// } else if (messageType == 3 && !stationFlag) {
-			// 	fprintf(stderr, "Announcement received before client station has been set.\n");
-			// 	break;
 			} else if (messageType == 2) {
 				fprintf(stderr, "Received more than one Welcome message\n");
 				break;
 			} else if (messageType == 3) {
-				pthread_mutex_lock(&welcomeMutex);
-				if (wait) {
-					int msg_size = new_buf[1];
-					new_buf[2 + msg_size] = 0;
-					printf("New song announced: %.*s\n", msg_size, &new_buf[2]);
-					wait = 0;
+
+				int msgSize = new_buf[1];
+				tv.tv_usec = 100000;
+				if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+					fprintf(stderr, "setsockopt\n");
+					return 1;
 				}
+				if ((res = recv(sock, new_buf, msgSize, MSG_WAITALL)) < 0) {
+					perror("recv");
+					return 1;
+				}
+				pthread_mutex_lock(&stationMutex);
+				if (!stationFlag) {
+					break;
+				}
+				pthread_mutex_unlock(&stationMutex);
+				pthread_mutex_lock(&welcomeMutex);
+				new_buf[msgSize] = 0;
+				printf("New song announced: %.*s\n", msgSize, new_buf);
+				if (!wait) {
+					printf("> ");
+				}
+				fflush(stdout);
+				wait = 0;
 				pthread_mutex_unlock(&welcomeMutex);
 				pthread_cond_signal(&welcomeCond);
 

@@ -158,7 +158,7 @@ void delete_all() {
 	}
 }
 
-void thread_cleanup(void *arg) {
+void client_thread_cleanup(void *arg) {
     client_t *c = arg;
 	int station = c->cd->station;
 	if (station != -1) {
@@ -205,7 +205,7 @@ int send_general_message(int socket, char *stationName, int replyType) {
  */
 void *client_handler(void *c) {
 	client_t *client = (client_t *)c;
-	pthread_cleanup_push(thread_cleanup, client);
+	pthread_cleanup_push(client_thread_cleanup, client);
 
 	struct sockaddr_in *addr_in = (struct sockaddr_in *)&(client->cd->addr);
 	uint16_t port = htons(addr_in->sin_port);
@@ -215,7 +215,20 @@ void *client_handler(void *c) {
 	int res;
 	if ((res = recv(client->cd->sock, buf, 3, 0)) < 0) {
 		perror("recv");
-	} else if (res == 3 && buf[0] == 0) {
+		client_thread_cleanup(client);
+		return 0;
+	} else if (res == 0) {
+		printf("client closed connection\n");
+		client_thread_cleanup(client);
+		return 0;
+	} else if (buf[0] == 0) {
+		if (res < 3) {
+			if (recv(client->cd->sock, &buf[res], 3 - res, MSG_WAITALL) < 0) {
+				perror("recv");
+				client_thread_cleanup(client);
+				return 0;
+			}
+		}
 		uint16_t firstByte = buf[1] << 8;
 		uint8_t secByte = buf[2] & 0xFF;
 		uint16_t udpPort = firstByte + secByte;
@@ -229,6 +242,7 @@ void *client_handler(void *c) {
 		bytes_sent = send(client->cd->sock, &msg, 3, 0);
 		if (!bytes_sent) {
 			perror("send");
+			client_thread_cleanup(client);
 			return 0;
 		}
 
@@ -239,29 +253,18 @@ void *client_handler(void *c) {
 			fprintf(stderr, "setsockopt 1\n");
 			pthread_exit((void *) 1);
 		}
-
-		// send_general_message(client->cd->sock, "asdf", 4);
-
 		while (1) {
-			int count = 0;
-			// send_general_message(client->cd->sock, "asdf", 4);
-
-			if ((count = recv(client->cd->sock, buf, 3, MSG_WAITALL)) < 0) {
-				// fprintf(stderr, "here?\n");
+			int res = 0;
+			if ((res = recv(client->cd->sock, buf, 3, MSG_WAITALL)) < 0) {
 				perror("recv");
 				break;
-			} else if (count == 0) {
+			} else if (res == 0) {
 				printf("client closed connection\n");
-				// TODO: cleanup resources?
 				break;
 			} else {
-				if (count < 3) {
-					break;
-				}
-				// send_general_message(client->cd->sock, "asdf", 4);
-
 				// TODO: refactor
 				// check if additional Hello message
+
 				if (buf[0] == 0) {
 					char invalid_msg[] = "Only one Hello message can be sent from a client.";
 					send_general_message(client->cd->sock, invalid_msg, 4);
@@ -292,7 +295,6 @@ void *client_handler(void *c) {
 			}
 		}
 	}
-	
 	pthread_cleanup_pop(1);
 	return 0;
 }
@@ -330,7 +332,6 @@ void *station_handler(void *arg) {
 
 				if (announce) {
 					send_general_message(c->cd->sock, s->name, 3);
-					announce = 0;
 				}
 
 				if (sendto(s->udpSocket, buf, SONG_BUFLEN, 0, &c->cd->addr, to_len) < 0) { 
@@ -338,6 +339,7 @@ void *station_handler(void *arg) {
 					exit(1);
 				}
 			}
+			announce = 0;
 			
 			if (nanosleep(&tim, &tim2) < 0) {
 				printf("Nano sleep system call failed \n");
