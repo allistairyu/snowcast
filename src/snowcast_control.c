@@ -90,7 +90,7 @@ void *repl_handler(void *arg) {
 
 			if (num_tokens == -1) {
 				fprintf(stderr, "eof?\n");
-				return 0;
+				exit(0);
 			} else if (num_tokens == 0 || num_tokens > 1) {
 				printf("Invalid input: number or 'q' expected\n");
 			} else {
@@ -119,11 +119,13 @@ void *repl_handler(void *arg) {
 					pthread_mutex_unlock(&welcomeMutex);
 				}
 			}
-        }
+        } else {
+			close(sock);
+			exit(0);
+		}
 	}
 	close(sock);
 	exit(0);
-	return 0;
 }
 
 int main(int argc, char** argv) {

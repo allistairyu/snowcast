@@ -150,7 +150,6 @@ void client_constructor(struct ClientData *cd) {
  * Frees/destroys Client resources
  */
 void client_destructor(client_t *client) {
-	printf("closing client\n");
 	close(client->cd->sock);
     free(client->cd);
     free(client);
@@ -288,7 +287,7 @@ void *client_handler(void *c) {
 				perror("recv");
 				break;
 			} else if (res == 0) {
-				printf("client closed connection\n");
+				printf("session id %s:%d: client closed connection\n", inet_ntoa(addr_in->sin_addr), port);
 				break;
 			} else {
 				// check if additional Hello message
