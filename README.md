@@ -88,7 +88,12 @@ stdout. Note that the listener does not control the data rate; it simply reads
 as fast as it can from the socket.
 
 ## Bugs
-I'm aware of one test that occasionally fails: TestStreamRateMultipleStations. 
+I'm aware of one test that occasionally fails: TestStreamRateMultipleStations.
+At the moment, I'm not sure what could be causing it, but it might have
+something to do with recv timing out in the client handler and closing the
+connection. Since it only happens ~20% of the time, it may also be a result of
+undefined behavior/memory issues. With more time, I would perform more testing
+to verify the bug.
 
 As I did this project in C, I fully expect there to be occasional memory leaks
 or segfaults. I tried my best to eliminate any errors I encountered with Address
