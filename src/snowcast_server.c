@@ -56,11 +56,17 @@ void pull_client(client_t *, client_t **);
 void insert_client(client_t *, client_t **);
 void client_constructor(struct ClientData *);
 void client_destructor(client_t *);
+void delete_all();
+void client_thread_cleanup(void *);
+void serialize_general_message(char *, struct GeneralMessage *);
+int send_general_message(int, char *, int);
 void *client_handler(void *);
+void *station_handler(void *);
+void sigint_handler(int);
 void print_stations(FILE *);
+void *repl_handler(void *);
 void change_station(client_t *, int);
 void set_station(client_t *, int);
-void *station_handler(void *);
 int parse(char[1024], char *[512]);
 int set_up_socket(int, const char*);
 void cleanup_server();
@@ -77,6 +83,7 @@ pthread_mutex_t serverMutex = PTHREAD_MUTEX_INITIALIZER;
 volatile sig_atomic_t sigint_received = 0;
 int tcpSocket;
 int udpSocket;
+
 /*
  * Pulls client from doubly-linked client list
  * thread_list_head must be locked before this function is called
@@ -125,10 +132,8 @@ void client_constructor(struct ClientData *cd) {
 
     int err;
     if ((err = pthread_create(&client->cd->thread, NULL, client_handler, (void*)client))) {
-        // handle_error_en(err, "pthread_create");
 		if (client) {
-			client_destructor(client); // TODO: any chance thread will free client before this gets called?
-
+			client_destructor(client);
 		}
 		fprintf(stderr, "pthread_create\n");
     }
@@ -138,10 +143,12 @@ void client_constructor(struct ClientData *cd) {
 			client_destructor(client);
 		}
 		fprintf(stderr, "pthread_detach\n");
-        // handle_error_en(err, "pthread_detach");
     }
 }
 
+/*
+ * Frees/destroys Client resources
+ */
 void client_destructor(client_t *client) {
 	printf("closing client\n");
 	close(client->cd->sock);
@@ -149,6 +156,9 @@ void client_destructor(client_t *client) {
     free(client);
 }
 
+/*
+ * Cancels all client and station threads
+ */
 void delete_all() {
 	for (int i = 0; i < numStations; i++) {
 		client_t *c = clientLists[i];
@@ -164,6 +174,9 @@ void delete_all() {
 	}
 }
 
+/*
+ * Pulls Client from client list and frees resources for Client
+ */
 void client_thread_cleanup(void *arg) {
     client_t *c = arg;
 	int station = c->cd->station;
@@ -176,6 +189,9 @@ void client_thread_cleanup(void *arg) {
     client_destructor(c);
 }
 
+/*
+ * Serializes a GeneralMessage into a buffer
+ */
 void serialize_general_message(char *buf, struct GeneralMessage *msg) {
 	buf[0] = msg->replyType;
 	buf[1] = msg->size;
@@ -184,6 +200,9 @@ void serialize_general_message(char *buf, struct GeneralMessage *msg) {
 	}
 }
 
+/*
+ * Sends a GeneralMessage to given TCP socket
+ */
 int send_general_message(int socket, char *stationName, int replyType) {
 	int nameLen = strlen(stationName);
 	struct GeneralMessage announcement = {replyType, (uint8_t)nameLen, stationName};
@@ -205,7 +224,7 @@ int send_general_message(int socket, char *stationName, int replyType) {
 }
 
 /*
- * start_routine for client
+ * start_routine for client thread
  * input is client_t malloc'ed in client_constructor
  * created and detached in client_constructor
  */
@@ -272,7 +291,6 @@ void *client_handler(void *c) {
 				printf("client closed connection\n");
 				break;
 			} else {
-				// TODO: refactor
 				// check if additional Hello message
 				if (buf[0] == 0) {
 					char invalid_msg[] = "Only one Hello message can be sent from a client.";
@@ -319,6 +337,10 @@ void *client_handler(void *c) {
 	return 0;
 }
 
+/*
+ * start_routine for station thread
+ * reads in FILE and streams via UDP to each client connected to station
+ */
 void *station_handler(void *arg) {
 	station_t *s = (station_t *)arg;
 
@@ -334,9 +356,7 @@ void *station_handler(void *arg) {
 		while (s->file) {
 			bytes_read = fread(buf, sizeof(char), SONG_BUFLEN, s->file);
 			if (bytes_read < SONG_BUFLEN) {
-				//TODO: announce song again
 				announce = 1;
-
 				if (fseek(s->file, 0, SEEK_SET) != 0) {
 					fprintf(stderr, "failed to reset file pointer\n");
 					break;
@@ -346,7 +366,6 @@ void *station_handler(void *arg) {
 			// loop through client list for this station and send data
 			client_t *c;
 			for (c = clientLists[s->id]; c != NULL; c = c->next) {
-				//TODO: conceptual: why is this socket diff from listener socket?
 				struct sockaddr_in *a = (struct sockaddr_in *)&c->cd->addr;
 				a->sin_port = htons(c->cd->udpPort);
 
@@ -374,6 +393,9 @@ void sigint_handler(int n) {
 	sigint_received = 1;
 }
 
+/*
+ * Prints client list for each station
+ */
 void print_stations(FILE *f) {
 	for (int i = 0; i < numStations; i++) {
 		fprintf(f, "%d,%s", i, stations[i].name);
@@ -389,6 +411,9 @@ void print_stations(FILE *f) {
 	}
 }
 
+/*
+ * start_routine for repl thread
+ */
 void *repl_handler(void *arg) {
 	while (1) {
 		char buffer[BUFLEN];
@@ -397,19 +422,18 @@ void *repl_handler(void *arg) {
             int num_tokens = parse(buffer, tokens);
 
 			if (num_tokens == -1) {
-				//idk
+				exit(0);
 			} else if (num_tokens == 0) {
-				//idk
+				exit(0);
 			} else {
 				if (strcmp(tokens[0], "p\n") == 0) {
 					print_stations(stdout);
 				} else if (strcmp(tokens[0], "p") == 0 && num_tokens == 2) {
 					tokens[1][strcspn(tokens[1], "\n")] = 0;
-					FILE *f = fopen(tokens[1], "w");// TODO: 
+					FILE *f = fopen(tokens[1], "w");
 					print_stations(f);
 					fclose(f);
 				} else if (strcmp(tokens[0], "q\n") == 0) {
-					// TODO: more clean up
 					sigint_received = 1;
 					// cleanup_server();
 					exit(0);
@@ -420,6 +444,10 @@ void *repl_handler(void *arg) {
 	return 0;
 }
 
+/*
+ * Changes station for a particular Client
+ * Client must already have a station
+ */
 void change_station(client_t *client, int newStation) {
 	int curStation = client->cd->station;
 	pthread_mutex_lock(&clientListMutexes[curStation]);
@@ -435,6 +463,9 @@ void change_station(client_t *client, int newStation) {
 	pthread_mutex_unlock(&clientListMutexes[newStation]);
 }
 
+/*
+ * Sets station for a particular Client
+ */
 void set_station(client_t *client, int station) {
 	pthread_mutex_lock(&clientListMutexes[station]);
 	client_t **stationClient = &clientLists[station];
@@ -443,8 +474,9 @@ void set_station(client_t *client, int station) {
 	pthread_mutex_unlock(&clientListMutexes[station]);
 }
 
-// return -1 if no tokens read
-// else return number of tokens
+/*
+ * Parses buffer into tokens array and returns number of tokens read
+ */
 int parse(char buffer[1024], char *tokens[512]) {
     char delimiters[] = " \t";
     char *next_token = strtok(buffer, delimiters);
@@ -466,8 +498,10 @@ int parse(char buffer[1024], char *tokens[512]) {
     return i;
 }
 
-// set up socket
-// type: 1=tcp, 0=udp
+/*
+ * Sets up socket for a given port.
+ * type: 1=TCP, 0=UDP
+ */
 int set_up_socket(int type, const char *port) {
 
 	int status;
@@ -495,12 +529,9 @@ int set_up_socket(int type, const char *port) {
 		close(lsocket);
     }
 	freeaddrinfo(servinfo);
-	// TODO: where to put this?
 
 	if (r == NULL) {
 		fprintf(stderr, "error connecting to the server\n");
-		//TODO: cleanup
-
 		exit(1);
 	}
 
@@ -511,16 +542,15 @@ int set_up_socket(int type, const char *port) {
 	return lsocket;
 }
 
-void cleanup_server() {
-	pthread_mutex_lock(&serverMutex);
-	delete_all(); // TODO: anything else for SIGINT?
-	pthread_mutex_unlock(&serverMutex);
-	pthread_mutex_destroy(&serverMutex);
-	close(tcpSocket);
-}
+// void cleanup_server() {
+// 	pthread_mutex_lock(&serverMutex);
+// 	delete_all();
+// 	pthread_mutex_unlock(&serverMutex);
+// 	pthread_mutex_destroy(&serverMutex);
+// 	close(tcpSocket);
+// }
 
 
-//TODO: all error returns must clean up resources..
 int main(int argc, char **argv) {
 
 	if (argc < 3) {
@@ -636,7 +666,7 @@ int main(int argc, char **argv) {
 		pthread_mutex_destroy(&clientListMutexes[i]);
 	}
 	pthread_mutex_lock(&serverMutex);
-	delete_all(); // TODO: anything else for SIGINT?
+	delete_all();
 	pthread_mutex_unlock(&serverMutex);
 	// free(stations);
 	pthread_cancel(repl_thread);

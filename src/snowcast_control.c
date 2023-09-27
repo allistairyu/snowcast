@@ -88,7 +88,6 @@ void *repl_handler(void *arg) {
             char *tokens[BUFLEN];
             int num_tokens = parse(buffer, tokens);
 
-			// TODO: refactor
 			if (num_tokens == -1) {
 				fprintf(stderr, "eof?\n");
 				return 0;
@@ -167,7 +166,7 @@ int main(int argc, char** argv) {
 
 	pthread_t repl_thread;
 	if (pthread_create(&repl_thread, NULL, repl_handler, (void *)&sock)) {
-		fprintf(stderr, "pthread_create\n");//TODO: when to use fprintf vs perror
+		fprintf(stderr, "pthread_create\n");
 		return 1;
 	}
 	if (pthread_detach(repl_thread)) {
