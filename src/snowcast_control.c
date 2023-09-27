@@ -222,7 +222,6 @@ int main(int argc, char** argv) {
 
 	char new_buf[80];
 	while (1) {
-		//TODO: does first message need to be a welcome
 		tv.tv_usec = 0;
 		if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
 			fprintf(stderr, "setsockopt\n");
@@ -236,7 +235,6 @@ int main(int argc, char** argv) {
 			return 0;	
 		} else {
 			int messageType = new_buf[0];
-			fprintf(stderr, "message type is %d\n", messageType);
 			if (messageType < 2 || messageType > 4) {
 				fprintf(stderr, "Received invalid message type.\n");
 				break;

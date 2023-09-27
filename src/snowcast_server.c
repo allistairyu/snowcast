@@ -19,7 +19,7 @@ const int BUFLEN = 256;
 const int SONG_BUFLEN = 1024;
 const int STREAM_RATE = 16384;
 
-struct client_data {
+struct ClientData {
 	int sock;
 	struct sockaddr addr;
 	socklen_t addrSize;
@@ -40,9 +40,7 @@ struct GeneralMessage {
 } __attribute__((packed));
 
 typedef struct Client {
-	struct client_data *cd;
-	// FILE *file;
-
+	struct ClientData *cd;
 	struct Client *prev;
 	struct Client *next;
 } client_t;
@@ -51,13 +49,12 @@ typedef struct Station {
 	FILE *file;
 	int id;
 	char* name;
-	int udpSocket;
 	pthread_t *thread;
 } station_t;
 
 void pull_client(client_t *, client_t **);
 void insert_client(client_t *, client_t **);
-void client_constructor(struct client_data *);
+void client_constructor(struct ClientData *);
 void client_destructor(client_t *);
 void *client_handler(void *);
 void print_stations(FILE *);
@@ -79,7 +76,7 @@ station_t *stations;
 pthread_mutex_t serverMutex = PTHREAD_MUTEX_INITIALIZER;
 volatile sig_atomic_t sigint_received = 0;
 int tcpSocket;
-
+int udpSocket;
 /*
  * Pulls client from doubly-linked client list
  * thread_list_head must be locked before this function is called
@@ -116,7 +113,7 @@ void insert_client(client_t *c, client_t **head) {
  * creates client and thread with given client data
  * mallocs client
  */
-void client_constructor(struct client_data *cd) {
+void client_constructor(struct ClientData *cd) {
 	client_t *client = malloc(sizeof(client_t));
 	if (!client) {
         fprintf(stderr, "malloc\n");
@@ -129,7 +126,6 @@ void client_constructor(struct client_data *cd) {
     int err;
     if ((err = pthread_create(&client->cd->thread, NULL, client_handler, (void*)client))) {
         // handle_error_en(err, "pthread_create");
-		fprintf(stderr, "here\n");
 		if (client) {
 			client_destructor(client); // TODO: any chance thread will free client before this gets called?
 
@@ -138,8 +134,6 @@ void client_constructor(struct client_data *cd) {
     }
 
     if ((err = pthread_detach(client->cd->thread))) {
-		fprintf(stderr, "here\n");
-
 		if (client) {
 			client_destructor(client);
 		}
@@ -260,7 +254,7 @@ void *client_handler(void *c) {
 			.tv_usec = 0
 		};
 		if (setsockopt(client->cd->sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-			fprintf(stderr, "setsockopt 1\n");
+			fprintf(stderr, "setsockopt\n");
 			pthread_exit((void *) 1);
 		}
 
@@ -292,7 +286,7 @@ void *client_handler(void *c) {
 				}
 				tv.tv_usec = 100000;
 				if (setsockopt(client->cd->sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-					fprintf(stderr, "setsockopt 1\n");
+					fprintf(stderr, "setsockopt\n");
 					break;
 				}
 				if (res < 3) {
@@ -360,7 +354,7 @@ void *station_handler(void *arg) {
 					send_general_message(c->cd->sock, s->name, 3);
 				}
 
-				if (sendto(s->udpSocket, buf, SONG_BUFLEN, 0, &c->cd->addr, to_len) < 0) { 
+				if (sendto(udpSocket, buf, SONG_BUFLEN, 0, &c->cd->addr, to_len) < 0) { 
 					perror("sendto");
 					exit(1);
 				}
@@ -548,7 +542,7 @@ int main(int argc, char **argv) {
 	const char* port = argv[1];
 
 	tcpSocket = set_up_socket(1, port);
-	int udpSocket = set_up_socket(0, port);
+	udpSocket = set_up_socket(0, port);
 
 	// allocate memory for client lists and their respective mutexes
 	clientLists = calloc(numStations, sizeof(client_t));
@@ -570,8 +564,6 @@ int main(int argc, char **argv) {
 	pthread_t repl_thread;
 	// join thread at end of main
     if ((err = pthread_create(&repl_thread, NULL, repl_handler, 0))) {
-        // handle_error_en(err, "pthread_create");
-		//TODO: cleanup
 		fprintf(stderr, "pthread_create\n");
 		return 1;
     }
@@ -589,7 +581,6 @@ int main(int argc, char **argv) {
 		stations[i].file = song;
 		stations[i].id = i;
 		stations[i].name = argv[i + 2];
-		stations[i].udpSocket = udpSocket;
 		pthread_t *thread = malloc(sizeof(pthread_t));
 		stations[i].thread = thread;
 		if ((err = pthread_create(stations[i].thread, NULL, station_handler, (void *) &stations[i]))) {
@@ -622,15 +613,15 @@ int main(int argc, char **argv) {
 			.tv_usec = 100000
 		};
 		if (setsockopt(csock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-			fprintf(stderr, "setsockopt 2\n");
+			fprintf(stderr, "setsockopt\n");
 			return 1;
 		}
-		struct client_data *cd = malloc(sizeof(struct client_data));
+		struct ClientData *cd = malloc(sizeof(struct ClientData));
 		if (!cd) {
 			perror("malloc");
 			return 1;
 		}
-		memset(cd, 0, sizeof(struct client_data));
+		memset(cd, 0, sizeof(struct ClientData));
 		cd->sock = csock;
 		memcpy(&cd->addr, &client_addr, client_len);
 		cd->addrSize = client_len;
