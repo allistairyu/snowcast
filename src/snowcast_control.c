@@ -123,6 +123,7 @@ void *repl_handler(void *arg) {
         }
 	}
 	close(sock);
+	exit(0);
 	return 0;
 }
 
@@ -182,7 +183,7 @@ int main(int argc, char** argv) {
 	bytes_sent = send(sock, &msg, 3, 0);
 	if (!bytes_sent) {
 		perror("send hello");
-		return 1;
+		return 0;
 	}
 
 	int res;
@@ -191,22 +192,22 @@ int main(int argc, char** argv) {
 	};
 	if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
 		fprintf(stderr, "setsockopt\n");
-		return 1;
+		return 0;
 	}
 
 	char buf[3];
 	if ((res = recv(sock, buf, 3, 0)) < 0) {
 		perror("recv");
-		return 1;
+		return 0;
 	} else {
 		int messageType = buf[0];
-		if (res < 3) {
-			if ((res = recv(sock, &buf[res], 3 - res, MSG_WAITALL)) < 0) {
-				perror("recv");
-				return 1;
-			}
-		}
 		if (messageType == 2) {
+			while (res < 3) {
+				if ((res += recv(sock, &buf[res], 3 - res, 0)) < 0) {
+					perror("recv");
+					return 0;
+				}
+			}
 			uint16_t numStations = buf[1] << 8;
 			numStations += buf[2] & 0xFF;
 			printf("Welcome to Snowcast! The server has %d stations.\n", numStations);
@@ -225,14 +226,17 @@ int main(int argc, char** argv) {
 		tv.tv_usec = 0;
 		if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
 			fprintf(stderr, "setsockopt\n");
-			return 1;
+			return 0;
 		}
-		if ((res = recv(sock, new_buf, 2, MSG_WAITALL)) < 0) {
+		if ((res = recv(sock, new_buf, 2, 0)) < 0) {
 			perror("recv");
-			return 1;
+			return 0;
+		} else if (res == 0) {
+			printf("server closed connection\n");
+			return 0;	
 		} else {
 			int messageType = new_buf[0];
-			printf("here\n");
+			fprintf(stderr, "message type is %d\n", messageType);
 			if (messageType < 2 || messageType > 4) {
 				fprintf(stderr, "Received invalid message type.\n");
 				break;
@@ -243,16 +247,21 @@ int main(int argc, char** argv) {
 				fprintf(stderr, "Received more than one Welcome message\n");
 				break;
 			} else if (messageType == 3) {
-
-				int msgSize = new_buf[1];
 				tv.tv_usec = 100000;
 				if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
 					fprintf(stderr, "setsockopt\n");
-					return 1;
+					return 0;
 				}
+				if (res == 1) {
+					if ((res = recv(sock, &new_buf[1], 1, MSG_WAITALL)) < 0) {
+						perror("recv");
+						return 0;
+					}
+				}
+				int msgSize = new_buf[1];
 				if ((res = recv(sock, new_buf, msgSize, MSG_WAITALL)) < 0) {
 					perror("recv");
-					return 1;
+					return 0;
 				}
 				pthread_mutex_lock(&stationMutex);
 				if (!stationFlag) {

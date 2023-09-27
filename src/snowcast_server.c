@@ -12,6 +12,7 @@
 #include <assert.h>
 #include <signal.h>
 #include <sys/time.h>
+#include <errno.h>
 
 int numStations = 0;
 const int BUFLEN = 256;
@@ -59,12 +60,13 @@ void insert_client(client_t *, client_t **);
 void client_constructor(struct client_data *);
 void client_destructor(client_t *);
 void *client_handler(void *);
-void print_stations();
+void print_stations(FILE *);
 void change_station(client_t *, int);
 void set_station(client_t *, int);
 void *station_handler(void *);
 int parse(char[1024], char *[512]);
 int set_up_socket(int, const char*);
+void cleanup_server();
 
 
 // array of clientList heads for each station
@@ -76,20 +78,23 @@ station_t *stations;
 
 pthread_mutex_t serverMutex = PTHREAD_MUTEX_INITIALIZER;
 volatile sig_atomic_t sigint_received = 0;
+int tcpSocket;
 
 /*
  * Pulls client from doubly-linked client list
  * thread_list_head must be locked before this function is called
  */
 void pull_client(client_t *c, client_t **head) {
-    if (*head == c) {
-		*head = (*head)->next;
-		if (*head) {
-			(*head)->prev = NULL;
-		}
-		c->next = NULL;
-	} else {
+	if (*head == NULL || c == NULL) {
+		return;
+	}
+	if (*head == c) {
+		*head = c->next;
+	}
+	if (c->next != NULL) {
 		c->next->prev = c->prev;
+	}
+	if (c->prev != NULL) {
 		c->prev->next = c->next;
 	}
 }
@@ -99,13 +104,12 @@ void pull_client(client_t *c, client_t **head) {
  * head must be locked before this function is called
  */
 void insert_client(client_t *c, client_t **head) {
-	if (*head) {
+	c->next = *head;
+	c->prev = NULL;
+	if (*head != NULL) {
 		(*head)->prev = c;
-		c->next = *head;
-		(*head) = c;
-	} else {
-		*head = c;
 	}
+	(*head) = c;
 }
 
 /*
@@ -125,12 +129,20 @@ void client_constructor(struct client_data *cd) {
     int err;
     if ((err = pthread_create(&client->cd->thread, NULL, client_handler, (void*)client))) {
         // handle_error_en(err, "pthread_create");
-		client_destructor(client); // TODO: any chance thread will free client before this gets called?
+		fprintf(stderr, "here\n");
+		if (client) {
+			client_destructor(client); // TODO: any chance thread will free client before this gets called?
+
+		}
 		fprintf(stderr, "pthread_create\n");
     }
 
     if ((err = pthread_detach(client->cd->thread))) {
-		client_destructor(client);
+		fprintf(stderr, "here\n");
+
+		if (client) {
+			client_destructor(client);
+		}
 		fprintf(stderr, "pthread_detach\n");
         // handle_error_en(err, "pthread_detach");
     }
@@ -211,16 +223,14 @@ void *client_handler(void *c) {
 	uint16_t port = htons(addr_in->sin_port);
 	printf("session id %s:%d: new client connected; expecting HELLO\n", inet_ntoa(addr_in->sin_addr), port);
 
-	char buf[3] = {0};
+	// int hello = 0;
 	int res;
+	char buf[3] = {0};
+
 	if ((res = recv(client->cd->sock, buf, 3, 0)) < 0) {
 		perror("recv");
-		client_thread_cleanup(client);
-		return 0;
 	} else if (res == 0) {
 		printf("client closed connection\n");
-		client_thread_cleanup(client);
-		return 0;
 	} else if (buf[0] == 0) {
 		if (res < 3) {
 			if (recv(client->cd->sock, &buf[res], 3 - res, MSG_WAITALL) < 0) {
@@ -253,9 +263,15 @@ void *client_handler(void *c) {
 			fprintf(stderr, "setsockopt 1\n");
 			pthread_exit((void *) 1);
 		}
+
 		while (1) {
-			int res = 0;
-			if ((res = recv(client->cd->sock, buf, 3, MSG_WAITALL)) < 0) {
+			int res;
+			tv.tv_usec = 0;
+			if (setsockopt(client->cd->sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+				fprintf(stderr, "setsockopt 1\n");
+				pthread_exit((void *) 1);
+			}
+			if ((res = recv(client->cd->sock, buf, 3, 0)) < 0) {
 				perror("recv");
 				break;
 			} else if (res == 0) {
@@ -264,7 +280,6 @@ void *client_handler(void *c) {
 			} else {
 				// TODO: refactor
 				// check if additional Hello message
-
 				if (buf[0] == 0) {
 					char invalid_msg[] = "Only one Hello message can be sent from a client.";
 					send_general_message(client->cd->sock, invalid_msg, 4);
@@ -274,6 +289,17 @@ void *client_handler(void *c) {
 					sprintf(invalid_msg, "Unknown command type: %d", buf[0]);
 					send_general_message(client->cd->sock, invalid_msg, 4);
 					break;
+				}
+				tv.tv_usec = 100000;
+				if (setsockopt(client->cd->sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+					fprintf(stderr, "setsockopt 1\n");
+					break;
+				}
+				if (res < 3) {
+					if ((res = recv(client->cd->sock, &buf[res], 3 - res, MSG_WAITALL)) < 0) {
+						perror("recv");
+						break;
+					}
 				}
 				int newStation = (buf[1] << 8) + (buf[2] & 0xFF);
 
@@ -347,9 +373,6 @@ void *station_handler(void *arg) {
 			}
 		}
 	}
-
-
-	// loop through client list for this station and write to each udpport
 	return 0;
 }
 
@@ -361,11 +384,13 @@ void print_stations(FILE *f) {
 	for (int i = 0; i < numStations; i++) {
 		fprintf(f, "%d,%s", i, stations[i].name);
 		client_t *c = clientLists[i];
+		pthread_mutex_lock(&clientListMutexes[i]);
 		while (c) {
 			struct sockaddr_in *addr_in = (struct sockaddr_in *)&(c->cd->addr);
 			fprintf(f, ",%s:%d", inet_ntoa(addr_in->sin_addr), c->cd->udpPort);
 			c = c->next;
 		}
+		pthread_mutex_unlock(&clientListMutexes[i]);
 		fprintf(f, "\n");
 	}
 }
@@ -392,7 +417,8 @@ void *repl_handler(void *arg) {
 				} else if (strcmp(tokens[0], "q\n") == 0) {
 					// TODO: more clean up
 					sigint_received = 1;
-					break;
+					// cleanup_server();
+					exit(0);
 				}
 			}
 		}
@@ -491,6 +517,14 @@ int set_up_socket(int type, const char *port) {
 	return lsocket;
 }
 
+void cleanup_server() {
+	pthread_mutex_lock(&serverMutex);
+	delete_all(); // TODO: anything else for SIGINT?
+	pthread_mutex_unlock(&serverMutex);
+	pthread_mutex_destroy(&serverMutex);
+	close(tcpSocket);
+}
+
 
 //TODO: all error returns must clean up resources..
 int main(int argc, char **argv) {
@@ -513,7 +547,7 @@ int main(int argc, char **argv) {
 	numStations = argc - 2;
 	const char* port = argv[1];
 
-	int tcpSocket = set_up_socket(1, port);
+	tcpSocket = set_up_socket(1, port);
 	int udpSocket = set_up_socket(0, port);
 
 	// allocate memory for client lists and their respective mutexes
@@ -543,9 +577,9 @@ int main(int argc, char **argv) {
     }
 
 
-	stations = malloc(numStations * sizeof(station_t));
+	stations = calloc(numStations, sizeof(station_t));
 	if (!stations) {
-		perror("malloc");
+		perror("calloc");
 		return 1;
 	}
 	
@@ -568,7 +602,7 @@ int main(int argc, char **argv) {
 			// handle_error_en(err, "pthread_detach");
 		}
 	}
-
+	// print_stations(stdout);
 	// Accept connections from clients and create thread for each client
 	while (!sigint_received) {
 		int csock;
